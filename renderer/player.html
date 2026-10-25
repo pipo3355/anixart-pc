@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https: data:; media-src https: http: blob: data: anixdl:; connect-src https: http: anixdl:; worker-src 'self' blob:" />
+  <title>Плеер</title>
+  <link rel="stylesheet" href="player.css" />
+</head>
+<body>
+  <video id="video" autoplay playsinline></video>
+
+  <div class="controls" id="controls">
+    <input id="seek" class="seek" type="range" min="0" max="1000" step="1" value="0" aria-label="Перемотка" />
+    <div class="seek-tip" id="seek-tip" hidden></div>
+    <div class="row">
+      <button id="play" class="icon" title="Пауза / продолжить (Пробел)">▶</button>
+      <div class="time" id="time">0:00 / 0:00</div>
+      <div class="spacer"></div>
+      <button id="mute" class="icon" title="Звук (M)">🔊</button>
+      <input id="volume" class="volume" type="range" min="0" max="100" step="1" value="100" aria-label="Громкость" />
+      <button id="fullscreen" class="icon" title="Полный экран (F)">⛶</button>
+    </div>
+  </div>
+
+  <div class="bar" id="bar">
+    <button id="prev" class="nav" title="Предыдущая серия (P)" hidden>⏮</button>
+    <div class="title" id="title"></div>
+    <span class="badge" id="offline" hidden>Скачано</span>
+    <button id="skip" class="nav skip" hidden>⏩ Пропустить опенинг</button>
+    <label>Качество
+      <select id="quality"></select>
+    </label>
+    <button id="next" class="nav" title="Следующая серия (N)" hidden>⏭</button>
+  </div>
+
+  <div class="notice" id="notice" hidden></div>
+
+  <div class="upnext" id="upnext" hidden>
+    <div>Следующая серия через <b id="countdown">5</b>…</div>
+    <div class="row">
+      <button id="upnext-cancel" class="ghost">Отмена</button>
+      <button id="upnext-go">Смотреть сейчас</button>
+    </div>
+  </div>
+
+  <div class="message" id="message" hidden></div>
+
+  <script src="../node_modules/hls.js/dist/hls.min.js"></script>
+  <script src="player.js"></script>
+</body>
+</html>

@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; img-src 'self' https: data: anixdl:; style-src 'self'; script-src 'self'; connect-src 'none'" />
+  <title>Anixart PC</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">Anixart<span>PC</span></div>
+    <nav id="nav">
+      <button data-view="search" class="active">🔍 Поиск</button>
+      <button data-view="updates">🔔 Обновления</button>
+      <button data-view="schedule">📅 Расписание</button>
+      <button data-view="downloads">⤓ Загрузки <span class="count" id="dl-count" hidden></span></button>
+      <div class="nav-title">Мои списки</div>
+      <button data-view="list" data-status="1">▶ Смотрю</button>
+      <button data-view="list" data-status="2">🗓 В планах</button>
+      <button data-view="list" data-status="3">✓ Просмотрено</button>
+      <button data-view="list" data-status="4">⏸ Отложено</button>
+      <button data-view="list" data-status="5">✕ Брошено</button>
+      <button data-view="favorites">★ Избранное</button>
+      <button data-view="history">🕘 История</button>
+      <div class="nav-title">Приложение</div>
+      <button data-view="settings">⚙ Настройки</button>
+    </nav>
+    <div class="update-banner" id="update-banner" hidden></div>
+    <div class="account" id="account"></div>
+  </aside>
+
+  <main id="main">
+    <section id="view-list" class="view">
+      <header class="view-header">
+        <h1 id="list-title">Поиск</h1>
+        <form id="search-form" class="search">
+          <input id="search-input" type="search" placeholder="Название аниме…" autocomplete="off" />
+          <button type="submit">Найти</button>
+        </form>
+        <div id="dl-tools" class="tools" hidden>
+          <label>Качество загрузки
+            <select id="dl-quality">
+              <option value="1080">1080p</option>
+              <option value="720">720p</option>
+              <option value="480">480p</option>
+              <option value="360">360p</option>
+            </select>
+          </label>
+          <button id="dl-folder" class="ghost" type="button">Открыть папку</button>
+        </div>
+      </header>
+      <div id="status" class="status"></div>
+      <div id="grid" class="grid"></div>
+      <div class="more-wrap"><button id="more" class="ghost" hidden>Показать ещё</button></div>
+    </section>
+
+    <section id="view-release" class="view" hidden>
+      <button id="back" class="ghost back">← Назад</button>
+      <div id="release"></div>
+    </section>
+  </main>
+
+  <dialog id="login-dialog">
+    <form id="login-form" method="dialog">
+      <h2>Вход в Anixart</h2>
+      <p class="muted">Тот же аккаунт, что и на телефоне — списки и прогресс будут общими.</p>
+      <label>Логин или почта<input id="login-name" required autocomplete="username" /></label>
+      <label>Пароль<input id="login-pass" type="password" required autocomplete="current-password" /></label>
+      <div id="login-error" class="error"></div>
+      <div class="row">
+        <button type="button" class="ghost" id="login-cancel">Отмена</button>
+        <button type="submit" id="login-submit">Войти</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

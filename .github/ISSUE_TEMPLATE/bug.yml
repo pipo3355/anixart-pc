@@ -1,0 +1,37 @@
+name: 🐞 Сообщить о проблеме
+description: Что-то не работает или работает не так
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: Что случилось?
+      description: Что вы делали и что пошло не так
+      placeholder: Нажал на серию, плеер открылся, но видео не грузится…
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Что ожидалось?
+  - type: input
+    id: title
+    attributes:
+      label: Тайтл, серия, озвучка и источник
+      description: Если проблема с конкретным видео
+      placeholder: ТораДора!, 17 серия, AniLibria, Kodik
+  - type: textarea
+    id: logs
+    attributes:
+      label: Скриншоты или сообщения об ошибке
+      description: Можно перетащить сюда скриншот. В плеере F12 открывает консоль с ошибками.
+  - type: input
+    id: version
+    attributes:
+      label: Версия Anixart PC
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Система

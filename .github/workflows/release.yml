@@ -1,0 +1,40 @@
+# Сборка и публикация релиза: запускается, когда в репозиторий отправлен тег вида v1.2.3.
+# Собирает установщик для Windows и выкладывает его в Releases вместе с latest.yml —
+# по этому файлу установленные копии приложения узнают о новой версии.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Проверить, что версия совпадает с тегом
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          PKG="v$(node -p "require('./package.json').version")"
+          if [ "$PKG" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::Версия в package.json ($PKG) не совпадает с тегом (${GITHUB_REF_NAME})"
+            exit 1
+          fi
+
+      - run: npm ci
+
+      - name: Собрать и опубликовать
+        run: npx electron-builder --win nsis --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

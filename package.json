@@ -1,0 +1,82 @@
+{
+  "name": "anixart-pc",
+  "productName": "Anixart PC",
+  "version": "0.7.0",
+  "description": "Неофициальный десктоп-клиент Anixart с синхронизацией аккаунта",
+  "author": {
+    "name": "pipo3355",
+    "url": "https://github.com/pipo3355"
+  },
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis",
+    "dist:portable": "electron-builder --win portable",
+    "release": "electron-builder --win nsis --publish always"
+  },
+  "dependencies": {
+    "anixartjs": "^1.1.0",
+    "hls.js": "^1.7.3",
+    "electron-updater": "^6.8.11"
+  },
+  "devDependencies": {
+    "electron": "^45.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "local.anixart.pc",
+    "productName": "Anixart PC",
+    "files": [
+      "main.js",
+      "preload.js",
+      "player-preload.js",
+      "downloads.js",
+      "renderer/**/*",
+      "build/icon.png"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Anixart PC",
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "Anixart-PC-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Anixart-PC-${version}-portable.${ext}"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "build/icon.png"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "pipo3355",
+        "repo": "anixart-pc",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pipo3355/anixart-pc.git"
+  },
+  "homepage": "https://github.com/pipo3355/anixart-pc",
+  "bugs": {
+    "url": "https://github.com/pipo3355/anixart-pc/issues"
+  },
+  "license": "GPL-2.0"
+}
