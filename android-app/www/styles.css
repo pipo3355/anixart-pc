@@ -356,3 +356,17 @@ body.playing .toast { display: none; }
 
 /* «картинка в картинке»: только видео */
 .player.pip .p-ui, .player.pip .p-unlock, .player.pip .p-toast, .player.pip .p-menu, .player.pip .p-upnext { display: none !important; }
+
+.log {
+  margin: 0;
+  max-height: 50vh;
+  overflow: auto;
+  background: #050816;
+  border-radius: 10px;
+  padding: 10px;
+  font: 11px/1.45 ui-monospace, "Roboto Mono", monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: text;
+  -webkit-user-select: text;
+}

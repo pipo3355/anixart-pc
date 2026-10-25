@@ -43,10 +43,11 @@ async function downloadTo(url, path, { progress = false, signal } = {}) {
       return st.size;
     } catch (err) {
       lastErr = err;
+      console.warn(`[file] попытка ${attempt}/${RETRIES}:`, (err && (err.message || err.code)) || err, url.slice(0, 120));
       await delay(800 * attempt);
     }
   }
-  throw lastErr;
+  throw new Error(`Не удалось скачать кусок видео: ${(lastErr && (lastErr.message || lastErr.code)) || lastErr}`);
 }
 
 async function fetchText(url) {
@@ -304,8 +305,8 @@ class Downloads {
   }
 
   async run(it, signal) {
+    console.log(`[download] ${it.releaseTitle} — ${it.name}: ищу ссылку`);
     const qualities = await qualitiesFor(it.url);
-    if (!qualities.length) throw new Error("Не удалось получить ссылку на видео");
     const q = this.pickQuality(qualities, it.wantQuality);
     it.quality = q.quality;
     const dir = `${ROOT}/${it.id}`;
@@ -318,6 +319,7 @@ class Downloads {
         return;
       } catch (err) {
         if (signal.aborted) throw err;
+        console.warn(`[download] зеркало не подошло (${q.quality}):`, err && err.message, source.src);
         lastErr = err;
       }
     }
@@ -330,6 +332,7 @@ class Downloads {
     if (variant) ({ text, url: base } = await fetchText(variant));
     const { playlist, files } = planPlaylist(text, base);
     if (!files.some((f) => f.segment)) throw new Error("Пустой плейлист");
+    console.log(`[download] плейлист: ${files.length} файлов`);
     it.kind = "hls";
     it.bytes = 0;
     let done = 0;

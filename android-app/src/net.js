@@ -52,22 +52,26 @@ async function nativeFetch(input, init = {}) {
   if (!/^https?:/i.test(url) || url.startsWith(window.location.origin)) return originalFetch(input, init);
 
   const headers = headersToObject(init.headers || (input instanceof Request ? input.headers : undefined));
+  if (!Object.keys(headers).some((k) => k.toLowerCase() === "user-agent")) headers["User-Agent"] = navigator.userAgent;
   const request = CapacitorHttp.request({
     url,
     method: (init.method || "GET").toUpperCase(),
     headers,
     data: convertBody(init.body, headers),
     responseType: "text",
-    connectTimeout: 20000,
-    readTimeout: 30000,
+    connectTimeout: 30000,
+    readTimeout: 45000,
   });
   let res;
+  const host = (() => { try { return new URL(url).hostname; } catch { return url; } })();
   try {
     res = await withSignal(request, init.signal);
   } catch (err) {
+    console.warn(`[net] ${host}:`, err && err.name === "TimeoutError" ? "таймаут" : (err && err.message) || err);
     if (err && (err.name === "AbortError" || err.name === "TimeoutError")) throw err;
     throw new TypeError(`Нет соединения: ${err && err.message ? err.message : err}`);
   }
+  if (res.status >= 400) console.warn(`[net] ${host}: HTTP ${res.status}`);
   const text = typeof res.data === "string" ? res.data : res.data == null ? "" : JSON.stringify(res.data);
   const response = new Response(NO_BODY.has(res.status) ? null : text, {
     status: res.status || 200,

@@ -3,6 +3,7 @@
 // тайтла (выбор озвучки и серий для загрузки) и скачанного тайтла (просмотр офлайн).
 
 import { App } from "@capacitor/app";
+import { log } from "./log.js";
 import { installNativeFetch, isNative } from "./net.js";
 import * as A from "./api.js";
 import { downloads } from "./downloads.js";
@@ -666,6 +667,29 @@ function renderProfile(view) {
     seg([[80, "80 с"], [85, "85 с"], [90, "90 с"], [120, "120 с"]], st.skipOpening, "skipOpening"),
   ));
 
+  const logBox = el("pre", { class: "log", hidden: true });
+  view.append(el("div", { class: "card" },
+    el("h2", { text: "Журнал" }),
+    el("div", { class: "row-sub", text: "Если что-то не работает — скопируйте журнал и пришлите его." }),
+    el("div", { class: "btn-row" },
+      el("button", { class: "ghost", text: "Показать", onclick: () => {
+        logBox.textContent = log.text() || "Пусто";
+        logBox.hidden = !logBox.hidden;
+      } }),
+      el("button", { class: "ghost", text: "Скопировать", onclick: async () => {
+        try {
+          await navigator.clipboard.writeText(`Anixart Offline ${APP_VERSION}\n${navigator.userAgent}\n\n${log.text()}`);
+          toast("Журнал скопирован");
+        } catch {
+          logBox.textContent = log.text();
+          logBox.hidden = false;
+          toast("Не удалось скопировать — выделите текст вручную", true);
+        }
+      } }),
+      el("button", { class: "ghost", text: "Очистить", onclick: () => { log.clear(); logBox.textContent = ""; toast("Журнал очищен"); } }),
+    ),
+    logBox));
+
   const upd = state.update;
   view.append(el("div", { class: "card" },
     el("h2", { text: "О приложении" }),
@@ -739,6 +763,7 @@ A.events.on((type, data) => {
 // ---------- старт ----------
 
 (async function start() {
+  console.log(`Anixart Offline ${APP_VERSION} · ${navigator.userAgent}`);
   await settings.load();
   await A.init();
   state.session = A.getSession();
