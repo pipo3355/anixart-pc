@@ -7,6 +7,11 @@ def appVersion() {
     return pkg.version
 }
 
+def appVersionCode() {
+    def code = System.getenv("VERSION_CODE")
+    return code ? Integer.parseInt(code) : 1
+}
+
 android {
     namespace = "io.github.pipo3355.anixartoffline"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -15,7 +20,7 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         // версия берётся из android-app/package.json, код версии — из CI (номер сборки)
-        versionCode (System.getenv("VERSION_CODE") ?: "1").toInteger()
+        versionCode appVersionCode()
         versionName appVersion()
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
