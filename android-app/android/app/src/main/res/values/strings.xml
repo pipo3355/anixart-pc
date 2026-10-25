@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Anixart Offline</string>
+    <string name="title_activity_main">Anixart Offline</string>
+    <string name="package_name">io.github.pipo3355.anixartoffline</string>
+    <string name="custom_url_scheme">io.github.pipo3355.anixartoffline</string>
+</resources>

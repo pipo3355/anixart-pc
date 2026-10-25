@@ -1,0 +1,18 @@
+{
+  "appId": "io.github.pipo3355.anixartoffline",
+  "appName": "Anixart Offline",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": true
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": false
+    },
+    "StatusBar": {
+      "overlaysWebView": false,
+      "style": "DARK",
+      "backgroundColor": "#10193a"
+    }
+  }
+}

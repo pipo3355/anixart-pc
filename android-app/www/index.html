@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <title>Anixart Offline</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main id="view" class="view"></main>
+
+  <nav id="tabs" class="tabs">
+    <button data-tab="downloads" class="on"><span class="ti">⤓</span><span>Загрузки</span></button>
+    <button data-tab="search"><span class="ti">⌕</span><span>Поиск</span></button>
+    <button data-tab="lists"><span class="ti">☰</span><span>Списки</span></button>
+    <button data-tab="profile"><span class="ti">◉</span><span>Профиль</span></button>
+  </nav>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="vendor/hls.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

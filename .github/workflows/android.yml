@@ -1,0 +1,78 @@
+# Сборка Android-приложения «Anixart Offline» (папка android-app/).
+# Запуск: Actions → Android → Run workflow (или тег android-vX.Y.Z).
+# Публикует релиз android-vX.Y.Z с .apk. Релиз не помечается «последним»,
+# чтобы автообновление ПК-версии продолжало смотреть на свои релизы.
+name: Android
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["android-v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android-app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Проверить ключ подписи
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          PW: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KS" ] || [ -z "$PW" ]; then
+            echo "::error::Нет секретов ANDROID_KEYSTORE_BASE64 и ANDROID_KEYSTORE_PASSWORD (Settings → Secrets and variables → Actions)"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: android-app/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Собрать веб-часть
+        run: |
+          npm ci
+          npm run build
+          npx cap sync android
+
+      - name: Собрать APK
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: anixartoffline
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.jks"
+          export ANDROID_KEYSTORE_FILE="$RUNNER_TEMP/release.jks"
+          cd android
+          ./gradlew --no-daemon assembleRelease
+          rm -f "$RUNNER_TEMP/release.jks"
+
+      - name: Опубликовать релиз
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          TAG="android-v$VERSION"
+          APK="Anixart-Offline-$VERSION.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "$APK"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" --clobber
+          else
+            gh release create "$TAG" "$APK" --latest=false \
+              --title "Android $VERSION" \
+              --notes "Приложение для загрузки серий и просмотра без интернета. Скачайте **$APK** на телефон и установите (Android может попросить разрешить установку из этого источника). Новые версии ставятся поверх старой — загрузки сохраняются."
+          fi
