@@ -6,6 +6,11 @@ name: Android
 
 on:
   workflow_dispatch:
+    inputs:
+      test:
+        description: "Пробная сборка без подписи и без релиза"
+        type: boolean
+        default: false
   push:
     tags: ["android-v*"]
 
@@ -22,6 +27,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Проверить ключ подписи
+        if: ${{ !inputs.test }}
         env:
           KS: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           PW: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -48,7 +54,18 @@ jobs:
           npm run build
           npx cap sync android
 
+      - name: Пробная сборка (debug)
+        if: ${{ inputs.test }}
+        run: cd android && ./gradlew --no-daemon assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ inputs.test }}
+        with:
+          name: anixart-offline-debug
+          path: android-app/android/app/build/outputs/apk/debug/*.apk
+
       - name: Собрать APK
+        if: ${{ !inputs.test }}
         env:
           VERSION_CODE: ${{ github.run_number }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -62,6 +79,7 @@ jobs:
           rm -f "$RUNNER_TEMP/release.jks"
 
       - name: Опубликовать релиз
+        if: ${{ !inputs.test }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
