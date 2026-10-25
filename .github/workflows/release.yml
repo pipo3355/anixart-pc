@@ -45,6 +45,18 @@ jobs:
           git tag "$TAG"
           git push origin "$TAG"
 
+      # Релиз создаём заранее и сами: если оставить это electron-builder, он заливает файлы
+      # параллельно и иногда создаёт два релиза с одним тегом
+      - name: Создать релиз
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          if ! gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release create "v$VERSION" --title "$VERSION" --notes "Установщик: **Anixart-PC-Setup-$VERSION.exe**. Уже установленные копии обновятся сами."
+          fi
+
       - run: npm ci
 
       - name: Собрать и опубликовать
