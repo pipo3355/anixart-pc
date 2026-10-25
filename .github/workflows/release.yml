@@ -32,6 +32,19 @@ jobs:
             exit 1
           fi
 
+      # Ручной запуск (кнопка Run workflow): тега ещё нет — создаём его из версии в package.json
+      - name: Создать тег для ручного запуска
+        if: "!startsWith(github.ref, 'refs/tags/v')"
+        shell: bash
+        run: |
+          TAG="v$(node -p "require('./package.json').version")"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "::error::Тег $TAG уже есть — поднимите версию в package.json"
+            exit 1
+          fi
+          git tag "$TAG"
+          git push origin "$TAG"
+
       - run: npm ci
 
       - name: Собрать и опубликовать
