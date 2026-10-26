@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld("api", {
   retryDownload: call("downloads:retry"),
   removeDownload: call("downloads:remove"),
   openDownloadsFolder: call("downloads:openFolder"),
+  exportDownload: call("downloads:export"),
   openExternal: call("shell:openExternal"),
   on(event, callback) {
     if (!EVENTS.includes(event)) throw new Error(`Неизвестное событие: ${event}`);

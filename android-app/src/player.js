@@ -28,6 +28,7 @@ const I = {
   chevron: '<svg viewBox="0 0 24 24" class="chev"><path d="M7.4 8.6 12 13.2l4.6-4.6L18 10l-6 6-6-6z"/></svg>',
   skip: '<svg viewBox="0 0 24 24"><path d="M5.6 6 4.2 7.4 8.8 12l-4.6 4.6L5.6 18l6-6zm7 0-1.4 1.4 4.6 4.6-4.6 4.6 1.4 1.4 6-6z"/></svg>',
   pip: '<svg viewBox="0 0 24 24"><path d="M19 7h-8v6h8zm2-4H3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16H3V5h18z"/></svg>',
+  moon: '<svg viewBox="0 0 24 24"><path d="M12.3 2a10 10 0 1 0 9.7 12.5A8 8 0 0 1 12.3 2z"/></svg>',
   fit: '<svg viewBox="0 0 24 24"><path d="M14 3h7v7h-2V6.4l-4.3 4.3-1.4-1.4L17.6 5H14zM3 14h2v3.6l4.3-4.3 1.4 1.4L6.4 19H10v2H3z"/></svg>',
 };
 
@@ -75,6 +76,7 @@ class Player {
           <div class="p-sp"></div>
           <button class="p-pill" data-a="speed">${I.speed}<span class="p-speed">Обычн.</span>${I.chevron}</button>
           <button class="p-pill" data-a="quality"><b class="p-hq">HQ</b><span class="p-q"></span>${I.chevron}</button>
+          <button class="p-pill" data-a="sleep">${I.moon}<span class="p-sleep">Сон</span></button>
           <button class="p-ic" data-a="lock">${I.unlock}</button>
         </div>
         <div class="p-center">
@@ -83,7 +85,10 @@ class Player {
           <button class="p-round" data-a="next">${I.next}</button>
         </div>
         <div class="p-bottom">
-          <input class="p-seek" type="range" min="0" max="1000" value="0" step="1" />
+          <div class="p-seek-wrap">
+            <input class="p-seek" type="range" min="0" max="1000" value="0" step="1" />
+            <div class="p-marks"></div>
+          </div>
           <div class="p-row">
             <span class="p-time">00:00 / 00:00</span>
             <div class="p-sp"></div>
@@ -97,6 +102,7 @@ class Player {
       <div class="p-toast" hidden></div>
       <div class="p-menu" hidden><div class="p-menu-box"></div></div>
       <div class="p-wait" hidden></div>
+      <button class="p-skipseg" data-a="skipseg" hidden></button>
       <div class="p-upnext" hidden>
         <div>Следующая серия через <b class="p-count">5</b>…</div>
         <div class="p-upnext-row"><button data-a="upnext-cancel" class="ghost">Отмена</button><button data-a="upnext-go">Смотреть</button></div>
@@ -133,6 +139,8 @@ class Player {
   async close() {
     if (!this.ctx) return;
     if (this.stopBoost) this.stopBoost();
+    clearInterval(this.sleepTick); this.sleepTick = null; this.sleepAt = 0; this.sleepAtEnd = false;
+    if (this.root) $(".p-sleep", this.root).textContent = "Сон";
     this.report(true);
     this.stopCountdown();
     if (this.hls) { this.hls.destroy(); this.hls = null; }
@@ -220,6 +228,16 @@ class Player {
     const it = this.current();
     this.marked = false;
     this.stopCountdown();
+    this.skip = it.skip || null;
+    this.skipped = { op: false, ed: false };
+    $(".p-marks", this.root).replaceChildren();
+    $(".p-skipseg", this.root).hidden = true;
+    if (it.skip === undefined) {
+      // тайминги ещё не искали (серия скачана старой версией) — ищем, пока есть интернет
+      downloads.fetchSkips(it).then((skip) => {
+        if (this.ctx && this.current().id === it.id && skip) { this.skip = skip; this.drawMarks(); }
+      }).catch(() => {});
+    }
     $(".p-t1", this.root).textContent = this.ctx.releaseTitle;
     $(".p-t2", this.root).textContent = it.name;
     $(".p-q", this.root).textContent = /^\d+$/.test(it.quality || "") ? `${it.quality}p` : "Авто";
@@ -388,6 +406,91 @@ class Player {
     clearTimeout(this.hideTimer);
   }
 
+  // ---------- опенинг и эндинг ----------
+
+  segmentAt(t) {
+    if (!this.skip) return null;
+    for (const kind of ["op", "ed"]) {
+      const sg = this.skip[kind];
+      if (sg && t >= sg.start && t < sg.end - 0.5) return { kind, ...sg };
+    }
+    return null;
+  }
+
+  drawMarks() {
+    const box = $(".p-marks", this.root);
+    box.replaceChildren();
+    const d = this.video.duration;
+    if (!this.skip || !d || !isFinite(d)) return;
+    for (const kind of ["op", "ed"]) {
+      const sg = this.skip[kind];
+      if (!sg) continue;
+      const m = document.createElement("div");
+      m.className = `p-mark ${kind}`;
+      m.style.left = `${(sg.start / d) * 100}%`;
+      m.style.width = `${((Math.min(sg.end, d) - sg.start) / d) * 100}%`;
+      box.append(m);
+    }
+  }
+
+  jumpSegment(seg) {
+    this.skipped[seg.kind] = true;
+    this.video.currentTime = Math.min(seg.end, (this.video.duration || seg.end) - 0.3);
+    this.toast(seg.kind === "op" ? "Опенинг пропущен" : "Эндинг пропущен");
+  }
+
+  checkSegments() {
+    const mode = settings.get().skipMode || "button";
+    const btn = $(".p-skipseg", this.root);
+    const seg = mode === "off" ? null : this.segmentAt(this.video.currentTime);
+    if (seg && mode === "auto" && !this.skipped[seg.kind]) {
+      this.jumpSegment(seg);
+      btn.hidden = true;
+      return;
+    }
+    if (seg && mode === "button") {
+      btn.textContent = seg.kind === "op" ? "Пропустить опенинг ⏩" : "Пропустить эндинг ⏩";
+      btn.hidden = false;
+    } else {
+      btn.hidden = true;
+    }
+  }
+
+  // ---------- таймер сна ----------
+  // Через выбранное время (или в конце серии) — пауза. Живёт, пока открыт плеер.
+
+  setSleep(value) {
+    clearInterval(this.sleepTick);
+    this.sleepTick = null;
+    this.sleepAt = 0;
+    this.sleepAtEnd = value === "end";
+    const label = $(".p-sleep", this.root);
+    label.textContent = "Сон";
+    if (!value) { this.toast("Таймер сна выключен"); return; }
+    if (this.sleepAtEnd) { label.textContent = "В конце"; this.toast("🌙 Пауза в конце этой серии"); return; }
+    this.sleepAt = Date.now() + value * 60_000;
+    this.toast(`🌙 Пауза через ${value} мин`);
+    const tick = () => {
+      const left = Math.max(0, this.sleepAt - Date.now());
+      label.textContent = fmt(left / 1000);
+      if (!left) this.fireSleep();
+    };
+    tick();
+    this.sleepTick = setInterval(tick, 1000);
+  }
+
+  fireSleep() {
+    clearInterval(this.sleepTick);
+    this.sleepTick = null;
+    this.sleepAt = 0;
+    this.sleepAtEnd = false;
+    $(".p-sleep", this.root).textContent = "Сон";
+    this.stopCountdown();
+    this.video.pause();
+    this.toast("🌙 Таймер сна — пауза", 5000);
+    this.showUi();
+  }
+
   startCountdown() {
     if (this.ctx.index >= this.ctx.items.length - 1) {
       if (this.nextPending(downloads.list())) { this.go(1); this.showUi(); return; }
@@ -417,11 +520,16 @@ class Player {
   bindEvents() {
     const v = this.video;
     ["timeupdate", "durationchange", "progress", "loadedmetadata"].forEach((e) => v.addEventListener(e, () => this.updateTime()));
-    v.addEventListener("timeupdate", () => this.report());
+    v.addEventListener("timeupdate", () => { this.report(); this.checkSegments(); });
+    v.addEventListener("durationchange", () => this.drawMarks());
     v.addEventListener("pause", () => { this.updatePlayIcon(); this.report(true); this.showUi(); });
     v.addEventListener("play", () => { this.updatePlayIcon(); this.showUi(); });
     v.addEventListener("ratechange", () => { if (this.boostedFrom == null) this.updateSpeedLabel(); });
-    v.addEventListener("ended", () => { this.report(true); this.startCountdown(); });
+    v.addEventListener("ended", () => {
+      this.report(true);
+      if (this.sleepAtEnd) { this.fireSleep(); return; } // «в конце серии» — следующую не включаем
+      this.startCountdown();
+    });
     v.addEventListener("error", () => this.toast("Не удалось открыть файл серии. Удалите её и скачайте заново.", 6000));
 
     this.seek.addEventListener("input", () => { this.seeking = true; this.updateTime(); clearTimeout(this.hideTimer); });
@@ -566,12 +674,24 @@ class Player {
         case "prev": this.go(-1); break;
         case "next": this.go(1); this.showUi(); break;
         case "skip": {
-          const s = settings.get().skipOpening || 85;
-          this.seekBy(s);
-          this.toast(`+${s} с`);
+          const seg = this.segmentAt(v.currentTime);
+          if (seg) { this.jumpSegment(seg); this.showUi(); break; }
+          const sec = settings.get().skipOpening || 85;
+          this.seekBy(sec);
+          this.toast(`+${sec} с`);
           this.showUi();
           break;
         }
+        case "skipseg": {
+          const seg = this.segmentAt(v.currentTime);
+          if (seg) this.jumpSegment(seg);
+          btn.hidden = true;
+          break;
+        }
+        case "sleep":
+          this.menu("Таймер сна", [[0, "Выключен"], [15, "15 минут"], [30, "30 минут"], [45, "45 минут"], [60, "1 час"], [90, "1,5 часа"], ["end", "В конце серии"]],
+            this.sleepAtEnd ? "end" : this.sleepAt ? null : 0, (val) => this.setSleep(val));
+          break;
         case "fit":
           this.fill = !this.fill;
           this.root.classList.toggle("fill", this.fill);

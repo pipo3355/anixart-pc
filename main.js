@@ -2,7 +2,7 @@
 // открывает окна плеера. Все сетевые запросы идут отсюда (Node), поэтому нет проблем с CORS.
 
 const {
-  app, BrowserWindow, ipcMain, safeStorage, shell, protocol, net, nativeTheme,
+  app, BrowserWindow, ipcMain, safeStorage, shell, protocol, net, nativeTheme, dialog,
   session: electronSession,
 } = require("electron");
 const path = require("path");
@@ -13,6 +13,7 @@ const {
   KodikParser, SibnetParser, RutubeParser, VKVideoParser, OKParser, AniLibriaParser,
 } = require("anixartjs");
 const { DownloadManager, createMediaHandler } = require("./downloads");
+const { getSkipTimes } = require("./skiptimes");
 
 // electron-updater есть только в собранном приложении с установленными зависимостями;
 // при запуске из исходников без него приложение тоже работает
@@ -103,7 +104,8 @@ const DEFAULT_SETTINGS = {
   theme: "dark", // "dark" | "light" | "system"
   accent: "#3b82f6",
   seekStep: 10, // стрелки ← → в плеере, секунд
-  skipOpening: 85, // Shift+→ и кнопка «Пропустить опенинг», секунд
+  skipOpening: 85, // Shift+→ и кнопка «Пропустить опенинг», если точных таймингов нет, секунд
+  skipMode: "button", // OP/ED: "auto" — пропускать сразу, "button" — показывать кнопку, "off"
 };
 let settings = { ...DEFAULT_SETTINGS };
 const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
@@ -120,6 +122,7 @@ function sanitizeSettings(input) {
   if (typeof input.accent === "string" && /^#[0-9a-f]{6}$/i.test(input.accent)) out.accent = input.accent;
   if ("seekStep" in input) out.seekStep = clampInt(input.seekStep, 1, 120, out.seekStep);
   if ("skipOpening" in input) out.skipOpening = clampInt(input.skipOpening, 1, 600, out.skipOpening);
+  if (["auto", "button", "off"].includes(input.skipMode)) out.skipMode = input.skipMode;
   return out;
 }
 
@@ -681,6 +684,22 @@ handle("downloads:add", async (items) => (Array.isArray(items) ? items : [items]
 handle("downloads:cancel", async (id) => downloads.cancel(id));
 handle("downloads:retry", async (id) => downloads.retry(id));
 handle("downloads:remove", async (id) => downloads.remove(id));
+// «Сохранить файлом»: серия одним видеофайлом с понятным именем, куда выберет пользователь
+handle("downloads:export", async (id) => {
+  const info = await downloads.exportInfo(id);
+  const clean = (t) => String(t || "").replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim();
+  const name = `${clean(info.it.releaseTitle)} — ${clean(info.it.name)}${info.it.dubberName ? ` (${clean(info.it.dubberName.split(",")[0])})` : ""}.${info.ext}`;
+  const res = await dialog.showSaveDialog(mainWindow, {
+    title: "Сохранить серию",
+    defaultPath: path.join(app.getPath("videos"), name),
+    filters: [{ name: "Видео", extensions: [info.ext] }],
+  });
+  if (res.canceled || !res.filePath) return null;
+  await downloads.exportTo(id, res.filePath);
+  shell.showItemInFolder(res.filePath);
+  return res.filePath;
+});
+
 handle("downloads:openFolder", async () => {
   await shell.openPath(downloads.dir);
   return true;
@@ -688,6 +707,58 @@ handle("downloads:openFolder", async () => {
 
 // ---------- Плеер ----------
 // У каждого окна плеера свой «контекст»: какой тайтл, какие серии, какая сейчас.
+
+// ---------- Тайминги опенинга/эндинга ----------
+// Храним найденные тайминги на диске (skips.json), чтобы не искать заново и работать офлайн.
+
+let skips = {}; // "<releaseId>:<position>" -> { op, ed, source } | { none: true, at }
+let skipsTimer = null;
+const skipsFile = () => path.join(app.getPath("userData"), "skips.json");
+const SKIP_RETRY_MS = 3 * 24 * 3600 * 1000; // «не нашлось» перепроверяем через 3 дня
+
+function loadSkips() {
+  try { skips = JSON.parse(fs.readFileSync(skipsFile(), "utf8")); } catch { skips = {}; }
+}
+function saveSkipsSoon() {
+  clearTimeout(skipsTimer);
+  skipsTimer = setTimeout(() => fsp.writeFile(skipsFile(), JSON.stringify(skips)).catch(() => {}), 1500);
+}
+
+// release: { id, titleOriginal, titleRu, year }, episode: { position, url }
+async function skipTimesFor(release, episode) {
+  const key = `${release.id}:${episode.position}`;
+  const known = skips[key];
+  if (known && !known.none) return known;
+  if (known && known.none && Date.now() - known.at < SKIP_RETRY_MS) return null;
+  if (looksOffline()) return null;
+  if (!release.titleOriginal && !release.titleRu) {
+    try {
+      const r = (await client.endpoints.release.get(release.id, false, REQ)).release;
+      Object.assign(release, { titleOriginal: r.title_original, titleRu: r.title_ru, year: r.year });
+    } catch {}
+  }
+  const found = await getSkipTimes(release, episode).catch(() => null);
+  skips[key] = found || { none: true, at: Date.now() };
+  saveSkipsSoon();
+  if (found) console.log(`[skip] ${release.titleRu || release.titleOriginal} #${episode.position}:`, JSON.stringify(found));
+  return found;
+}
+
+// Ищем тайминги в фоне и отправляем в окно плеера, когда найдутся
+function sendSkipTimes(win, ctx, data) {
+  const ep = ctx.episodes[ctx.index];
+  const local = downloads.findDone(ctx.releaseId, ep.position, ctx.sourceId);
+  if (local && local.skip) {
+    win.webContents.send("player:skip", { position: data.position, skip: local.skip });
+    return;
+  }
+  const release = { id: ctx.releaseId, titleOriginal: ctx.releaseOriginal, titleRu: ctx.releaseTitle, year: ctx.releaseYear };
+  skipTimesFor(release, { position: ep.position, url: ep.url })
+    .then((skip) => {
+      if (!win.isDestroyed() && skip) win.webContents.send("player:skip", { position: data.position, skip });
+    })
+    .catch(() => {});
+}
 
 const players = new Map(); // webContents.id -> ctx
 
@@ -807,6 +878,7 @@ async function showEpisode(win, ctx, data) {
     ctx.inPlayerPage = true;
     await win.loadFile(path.join(__dirname, "renderer", "player.html"));
   }
+  sendSkipTimes(win, ctx, data);
   return { mode: data.offline ? "offline" : "direct" };
 }
 
@@ -835,6 +907,8 @@ handle("player:openDownload", async (id) => {
   return openPlayer({
     releaseId: it.releaseId,
     releaseTitle: it.releaseTitle,
+    releaseOriginal: it.releaseOriginal,
+    releaseYear: it.releaseYear,
     sourceId: it.sourceId,
     episodes,
     index: Math.max(0, episodes.findIndex((e) => e.position === it.position)),
@@ -983,6 +1057,7 @@ app.whenReady().then(async () => {
   await loadSession();
   loadProgress();
   loadSettings();
+  loadSkips();
   loadPendingMarks();
   // отложенные отметки: пробуем отправить вскоре после запуска и затем раз в минуту
   setTimeout(() => flushPendingMarks().catch(() => {}), 5000);
@@ -990,6 +1065,10 @@ app.whenReady().then(async () => {
   downloads = new DownloadManager({
     dir: path.join(app.getPath("userData"), "downloads"),
     resolveLinks: qualitiesFor,
+    resolveSkips: (it) => skipTimesFor(
+      { id: it.releaseId, titleOriginal: it.releaseOriginal, titleRu: it.releaseTitle, year: it.releaseYear },
+      { position: it.position, url: it.url },
+    ),
     isOnline: () => net.isOnline(),
     onChange: (list) => {
       sendToMain("downloads:changed", list);

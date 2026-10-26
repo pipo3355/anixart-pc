@@ -8,6 +8,7 @@ import { FileTransfer } from "@capacitor/file-transfer";
 import { Network } from "@capacitor/network";
 import { DATA, readJson, writeJson, exists, removePath, serial } from "./storage.js";
 import { qualitiesFor } from "./links.js";
+import { getSkipTimes } from "../../skiptimes.js";
 
 const ROOT = "downloads";
 const INDEX = `${ROOT}/index.json`;
@@ -16,6 +17,13 @@ const WORKERS = 3; // кусков HLS одновременно
 const RETRIES = 3;
 const FILE_TIMEOUT_MS = 120_000;
 const UA = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Mobile Safari/537.36";
+
+// «…/720.mp4:hls:manifest.m3u8» → «…/720.mp4»
+function directMp4(src) {
+  const m = /^(.*\.mp4):hls:manifest\.m3u8(\?.*)?$/i.exec(String(src || ""));
+  if (!m) return null;
+  return (m[1].startsWith("//") ? `https:${m[1]}` : m[1]) + (m[2] || "");
+}
 
 const isHls = (s) => /m3u8/i.test(s.src) || /mpegurl/i.test(s.type || "");
 
@@ -162,6 +170,8 @@ class Downloads {
       id: randomId(),
       releaseId: info.releaseId,
       releaseTitle: info.releaseTitle,
+      releaseOriginal: info.releaseOriginal || "",
+      releaseYear: info.releaseYear || null,
       poster: info.poster || null,
       dubberName: info.dubberName || "",
       sourceId: info.sourceId,
@@ -172,6 +182,7 @@ class Downloads {
       quality: null,
       kind: null,
       entry: null,
+      skip: undefined, // тайминги OP/ED: {op, ed} | null | undefined (ещё не искали)
       status: "queued",
       progress: 0,
       bytes: 0,
@@ -312,18 +323,50 @@ class Downloads {
     const dir = `${ROOT}/${it.id}`;
     await Filesystem.mkdir({ path: dir, directory: DATA, recursive: true }).catch(() => {});
     let lastErr;
+    let ok = false;
     for (const source of q.sources) {
       try {
+        // У Kodik за «…/720.mp4:hls:manifest.m3u8» обычно лежит цельный MP4 — один файл вместо сотен кусков
+        const mp4 = directMp4(source.src);
+        if (mp4) {
+          try {
+            await this.runFile(it, mp4, dir, signal, { requireVideo: true });
+            ok = true;
+            break;
+          } catch (err) {
+            if (signal.aborted) throw err;
+            console.warn("[download] прямой MP4 не подошёл, качаю кусками:", err && err.message);
+            await Filesystem.deleteFile({ path: `${dir}/video.mp4`, directory: DATA }).catch(() => {});
+          }
+        }
         if (isHls(source)) await this.runHls(it, source.src, dir, signal);
         else await this.runFile(it, source.src, dir, signal);
-        return;
+        ok = true;
+        break;
       } catch (err) {
         if (signal.aborted) throw err;
         console.warn(`[download] зеркало не подошло (${q.quality}):`, err && err.message, source.src);
         lastErr = err;
       }
     }
-    throw lastErr || new Error("Источник недоступен");
+    if (!ok) throw lastErr || new Error("Источник недоступен");
+    if (it.skip === undefined) await this.fetchSkips(it);
+  }
+
+  // Тайминги опенинга/эндинга — сохраняем вместе с серией, чтобы пропуск работал офлайн
+  async fetchSkips(it) {
+    try {
+      const found = await getSkipTimes(
+        { id: it.releaseId, titleOriginal: it.releaseOriginal, titleRu: it.releaseTitle, year: it.releaseYear },
+        { position: it.position, url: it.url },
+      );
+      it.skip = found ? { op: found.op, ed: found.ed } : null;
+      if (found) console.log(`[skip] ${it.releaseTitle} #${it.position}: ${found.source}`);
+    } catch {
+      it.skip = undefined;
+    }
+    this.persist();
+    return it.skip;
   }
 
   async runHls(it, url, dir, signal) {
@@ -354,7 +397,16 @@ class Downloads {
     it.entry = "index.m3u8";
   }
 
-  async runFile(it, url, dir, signal) {
+  async runFile(it, url, dir, signal, { requireVideo = false } = {}) {
+    if (requireVideo) {
+      // проверяем, что по ссылке действительно видео, а не страница с ошибкой
+      const res = await fetch(url, { method: "HEAD", headers: headersFor(url) });
+      const type = res.headers.get("content-type") || "";
+      const len = Number(res.headers.get("content-length")) || 0;
+      if (!res.ok || /text|html|json|mpegurl/i.test(type) || (len && len < 1_000_000)) {
+        throw new Error(`не видео (HTTP ${res.status}, ${type || "без типа"}, ${len} байт)`);
+      }
+    }
     it.kind = "file";
     const path = `${dir}/video.mp4`;
     const handle = await FileTransfer.addListener("progress", (p) => {

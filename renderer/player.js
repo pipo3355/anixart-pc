@@ -24,7 +24,6 @@ function applySettings(st) {
   root.style.setProperty("--accent", st.accent);
   const [r, g, b] = [1, 3, 5].map((i) => parseInt(st.accent.slice(i, i + 2), 16));
   root.style.setProperty("--on-accent", (r * 299 + g * 587 + b * 114) / 1000 > 170 ? "#16161a" : "#ffffff");
-  $("skip").title = `Перемотать на ${st.skipOpening} с вперёд (Shift+→)`;
 }
 
 window.player.settings().then((res) => res.ok && applySettings(res.data)).catch(() => {});
@@ -51,13 +50,94 @@ function seekBy(delta) {
   }, SEEK_DEBOUNCE_MS);
 }
 
-function skipOpening() {
-  seekBy(settings.skipOpening);
+// ---------- Опенинг и эндинг ----------
+// Тайминги приходят из главного процесса (Kodik / AniSkip / сохранённые для офлайна).
+// Режимы: «auto» — перепрыгиваем сами, «button» — показываем кнопку, «off» — ничего.
+// Если точных таймингов нет — кнопка в первые 10 минут перематывает на N секунд, как раньше.
+
+let skip = null; // { op: {start,end}|null, ed: {start,end}|null }
+let pendingSkip = null; // тайминги могли прийти раньше, чем загрузилась серия
+const skipped = { op: false, ed: false };
+
+const LABEL = { op: "опенинг", ed: "эндинг" };
+
+function segmentAt(t) {
+  if (!skip) return null;
+  for (const kind of ["op", "ed"]) {
+    const s = skip[kind];
+    if (s && t >= s.start && t < s.end - 0.5) return { kind, ...s };
+  }
+  return null;
 }
+
+function jumpTo(seconds, text) {
+  clearTimeout(seekTimer);
+  seekTarget = null;
+  video.currentTime = Math.min(seconds, (video.duration || seconds) - 0.3);
+  if (text) notice(text, 1500);
+}
+
+function skipOpening() {
+  const seg = segmentAt(video.currentTime);
+  if (seg) {
+    skipped[seg.kind] = true;
+    jumpTo(seg.end, `${LABEL[seg.kind][0].toUpperCase() + LABEL[seg.kind].slice(1)} пропущен`);
+  } else {
+    seekBy(settings.skipOpening);
+  }
+}
+
+function drawMarks() {
+  const box = $("marks");
+  box.replaceChildren();
+  const d = video.duration;
+  if (!skip || !d || !isFinite(d)) return;
+  for (const kind of ["op", "ed"]) {
+    const s = skip[kind];
+    if (!s) continue;
+    const m = document.createElement("div");
+    m.className = `mark ${kind}`;
+    m.title = LABEL[kind];
+    m.style.left = `${(s.start / d) * 100}%`;
+    m.style.width = `${(Math.min(s.end, d) - s.start) / d * 100}%`;
+    box.append(m);
+  }
+}
+
+function applySkip(value) {
+  pendingSkip = value;
+  if (!data || !value || value.position !== data.position) return;
+  skip = value.skip;
+  drawMarks();
+}
+
+window.player.onSkip(applySkip);
+video.addEventListener("durationchange", drawMarks);
 
 $("skip").addEventListener("click", skipOpening);
 video.addEventListener("timeupdate", () => {
-  $("skip").hidden = !(video.currentTime < OPENING_ZONE && video.duration > OPENING_ZONE);
+  const mode = settings.skipMode || "button";
+  const t = video.currentTime;
+  const seg = mode === "off" ? null : segmentAt(t);
+  const btn = $("skip");
+  if (seg && mode === "auto" && !skipped[seg.kind]) {
+    skipped[seg.kind] = true;
+    jumpTo(seg.end, `${LABEL[seg.kind][0].toUpperCase() + LABEL[seg.kind].slice(1)} пропущен`);
+    btn.hidden = true;
+    return;
+  }
+  if (seg) {
+    btn.textContent = `⏩ Пропустить ${LABEL[seg.kind]}`;
+    btn.title = "Shift+→";
+    btn.hidden = false;
+  } else if (!skip && mode !== "off") {
+    // точных таймингов нет — по-старому: первые 10 минут кнопка «+N с»
+    btn.textContent = "⏩ Пропустить опенинг";
+    btn.title = `Перемотать на ${settings.skipOpening} с вперёд (Shift+→)`;
+    btn.hidden = !(t < OPENING_ZONE && video.duration > OPENING_ZONE);
+  } else {
+    btn.hidden = true;
+  }
 });
 
 // ---------- Мелочи интерфейса ----------
@@ -195,6 +275,10 @@ function label(q) {
 // Показывает серию: заголовок, качества, кнопки, продолжение с места
 function load(next) {
   data = next;
+  skip = null;
+  skipped.op = skipped.ed = false;
+  $("marks").replaceChildren();
+  if (pendingSkip) applySkip(pendingSkip);
   hideUpNext();
   $("title").textContent = data.title;
   document.title = data.title;
@@ -304,6 +388,52 @@ window.player.onLoad((next) => {
   load(next);
 });
 
+// ---------- Таймер сна ----------
+// Через выбранное время (или в конце серии) видео встаёт на паузу.
+// Таймер живёт, пока открыто окно плеера, и переживает переключение серий.
+
+const sleepSelect = $("sleep");
+let sleepAt = 0; // время срабатывания, мс
+let sleepAtEnd = false;
+let sleepTick = null;
+
+function stopSleep() {
+  sleepAt = 0;
+  sleepAtEnd = false;
+  clearInterval(sleepTick);
+  sleepTick = null;
+  sleepSelect.value = "0";
+  $("sleep-left").hidden = true;
+}
+
+function fireSleep() {
+  stopSleep();
+  hideUpNext();
+  video.pause();
+  notice("🌙 Таймер сна — пауза", 24 * 3600 * 1000);
+}
+
+sleepSelect.addEventListener("change", () => {
+  const v = sleepSelect.value;
+  clearInterval(sleepTick);
+  sleepAt = 0;
+  sleepAtEnd = v === "end";
+  $("sleep-left").hidden = true;
+  if (v === "0") { notice("Таймер сна выключен"); return; }
+  if (sleepAtEnd) { notice("🌙 Пауза в конце этой серии"); return; }
+  sleepAt = Date.now() + Number(v) * 60_000;
+  notice(`🌙 Пауза через ${v} мин`);
+  const tick = () => {
+    const left = Math.max(0, sleepAt - Date.now());
+    $("sleep-left").textContent = fmt(left / 1000);
+    $("sleep-left").hidden = false;
+    if (!left) fireSleep();
+  };
+  tick();
+  sleepTick = setInterval(tick, 1000);
+});
+sleepSelect.addEventListener("keydown", (e) => e.stopPropagation());
+
 // Автопереход после окончания серии
 let countdownTimer = null;
 function hideUpNext() {
@@ -314,6 +444,7 @@ function hideUpNext() {
 
 video.addEventListener("ended", () => {
   report(true);
+  if (sleepAtEnd) { fireSleep(); return; } // «в конце серии» — дальше не включаем
   if (!data || !data.hasNext) {
     notice("Это была последняя серия", 5000);
     return;
@@ -509,7 +640,7 @@ function spaceUp() {
 window.addEventListener("blur", () => { clearTimeout(spaceTimer); spaceTimer = null; stopBoost(); });
 
 window.addEventListener("keydown", (e) => {
-  if (e.target === qualitySelect || e.ctrlKey || e.altKey || e.metaKey) return;
+  if (e.target === qualitySelect || e.target === sleepSelect || e.ctrlKey || e.altKey || e.metaKey) return;
   if (e.key === " ") {
     e.preventDefault();
     e.stopPropagation();

@@ -576,6 +576,8 @@ function episodePicker(box, r) {
       downloads.add({
         releaseId: r.id,
         releaseTitle: r.title_ru || r.title_original,
+        releaseOriginal: r.title_original || "",
+        releaseYear: r.year || null,
         poster: r.image,
         dubberName: [dub && dub.name, src && src.name].filter(Boolean).join(", "),
         sourceId: saved.sourceId,
@@ -661,10 +663,16 @@ function renderProfile(view) {
   ));
 
   view.append(el("div", { class: "card" },
+    el("h2", { text: "Опенинг и эндинг" }),
+    el("div", { class: "row-sub", text: "Отрезки берутся с Kodik или из AniSkip, сохраняются вместе с серией и видны на полосе." }),
+    seg([["auto", "Пропускать сразу"], ["button", "Показывать кнопку"], ["off", "Не пропускать"]], st.skipMode || "button", "skipMode"),
+  ));
+
+  view.append(el("div", { class: "card" },
     el("h2", { text: "Плеер" }),
     el("div", { class: "row-sub", text: "Двойное касание слева/справа перематывает на" }),
     seg([[5, "5 с"], [10, "10 с"], [15, "15 с"], [30, "30 с"]], st.seekStep, "seekStep"),
-    el("div", { class: "row-sub", text: "Кнопка «пропустить» перематывает на" }),
+    el("div", { class: "row-sub", text: "Если отрезков нет, кнопка «пропустить» перематывает на" }),
     seg([[80, "80 с"], [85, "85 с"], [90, "90 с"], [120, "120 с"]], st.skipOpening, "skipOpening"),
   ));
 
@@ -790,5 +798,5 @@ A.events.on((type, data) => {
   state.downloads = downloads.list();
   render();
   if (isNative()) setTimeout(() => updater.check(), 5000);
-  else window.__app = { downloads, player, state, render, updaterCheck: () => updater.check() }; // для отладки в браузере
+  else window.__app = { downloads, player, settings, state, render, updaterCheck: () => updater.check() }; // для отладки в браузере
 })();

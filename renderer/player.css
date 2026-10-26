@@ -174,3 +174,11 @@ input[type="range"]:active::-webkit-slider-thumb { opacity: 1; }
   font-variant-numeric: tabular-nums;
   pointer-events: none;
 }
+
+/* отрезки опенинга и эндинга на полосе */
+.seek-wrap { position: relative; }
+.marks { position: absolute; left: 7px; right: 7px; top: 50%; height: 5px; transform: translateY(-50%); pointer-events: none; }
+.mark { position: absolute; top: 0; bottom: 0; background: rgba(255, 196, 60, .7); border-radius: 2px; }
+.seek-wrap:hover .marks { height: 7px; }
+
+.sleep-left { font-variant-numeric: tabular-nums; color: #ececf1; font-size: 13px; }

@@ -11,7 +11,10 @@
   <video id="video" autoplay playsinline></video>
 
   <div class="controls" id="controls">
-    <input id="seek" class="seek" type="range" min="0" max="1000" step="1" value="0" aria-label="Перемотка" />
+    <div class="seek-wrap">
+      <input id="seek" class="seek" type="range" min="0" max="1000" step="1" value="0" aria-label="Перемотка" />
+      <div class="marks" id="marks"></div>
+    </div>
     <div class="seek-tip" id="seek-tip" hidden></div>
     <div class="row">
       <button id="play" class="icon" title="Пауза / продолжить (Пробел)">▶</button>
@@ -28,6 +31,18 @@
     <div class="title" id="title"></div>
     <span class="badge" id="offline" hidden>Скачано</span>
     <button id="skip" class="nav skip" hidden>⏩ Пропустить опенинг</button>
+    <label title="Таймер сна">🌙
+      <select id="sleep">
+        <option value="0">Выкл</option>
+        <option value="15">15 мин</option>
+        <option value="30">30 мин</option>
+        <option value="45">45 мин</option>
+        <option value="60">1 час</option>
+        <option value="90">1,5 часа</option>
+        <option value="end">В конце серии</option>
+      </select>
+      <span class="sleep-left" id="sleep-left" hidden></span>
+    </label>
     <label>Качество
       <select id="quality"></select>
     </label>

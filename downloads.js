@@ -15,6 +15,13 @@ const SEGMENT_WORKERS = 4;
 const RETRIES = 3;
 
 const POSTER_EXTS = ["jpg", "png", "webp"];
+// «…/720.mp4:hls:manifest.m3u8» → «…/720.mp4»
+function directMp4(src) {
+  const m = /^(.*\.mp4):hls:manifest\.m3u8(\?.*)?$/i.exec(String(src || ""));
+  if (!m) return null;
+  return (m[1].startsWith("//") ? `https:${m[1]}` : m[1]) + (m[2] || "");
+}
+
 const isHlsSource = (s) => /m3u8/i.test(s.src) || /mpegurl/i.test(s.type || "");
 
 function requestHeaders(url) {
@@ -99,8 +106,9 @@ function planMediaPlaylist(text, baseUrl) {
 // ---------- Менеджер ----------
 
 class DownloadManager {
-  constructor({ dir, resolveLinks, onChange, isOnline = () => true }) {
+  constructor({ dir, resolveLinks, resolveSkips = null, onChange, isOnline = () => true }) {
     this.dir = dir;
+    this.resolveSkips = resolveSkips; // (item) => {op, ed} | null — тайминги для офлайна
     this.isOnline = isOnline;
     this._waitTimer = null;
     this.indexFile = path.join(dir, "downloads.json");
@@ -197,6 +205,8 @@ class DownloadManager {
       id: crypto.randomBytes(8).toString("hex"),
       releaseId: info.releaseId,
       releaseTitle: info.releaseTitle,
+      releaseOriginal: info.releaseOriginal || "",
+      releaseYear: info.releaseYear || null,
       poster: info.poster || null,
       dubberName: info.dubberName || "",
       sourceId: info.sourceId,
@@ -206,6 +216,7 @@ class DownloadManager {
       wantQuality: String(info.quality || "720"),
       quality: null,
       kind: null, // "hls" | "file"
+      skip: undefined, // тайминги OP/ED: {op, ed} | null (не нашлись) | undefined (ещё не искали)
       entry: null, // файл, с которого начинается просмотр
       status: "queued",
       progress: 0,
@@ -314,17 +325,70 @@ class DownloadManager {
     await fsp.mkdir(dir, { recursive: true });
 
     let lastErr;
+    let ok = false;
     for (const source of q.sources) {
       try {
+        // У Kodik за HLS-ссылкой «…/720.mp4:hls:manifest.m3u8» обычно лежит цельный MP4 —
+        // пробуем его: одна загрузка вместо сотен кусков и файл открывается любым плеером.
+        const mp4 = directMp4(source.src);
+        if (mp4) {
+          try {
+            await this._downloadFile(it, mp4, dir, signal, { requireVideo: true });
+            ok = true;
+            break;
+          } catch (err) {
+            if (signal.aborted) throw err;
+            console.warn("[download] прямой MP4 не подошёл, качаю кусками:", err.message);
+          }
+        }
         if (isHlsSource(source)) await this._downloadHls(it, source.src, dir, signal);
         else await this._downloadFile(it, source.src, dir, signal);
-        return;
+        ok = true;
+        break;
       } catch (err) {
         if (signal.aborted) throw err;
         lastErr = err;
       }
     }
-    throw lastErr || new Error("Источник недоступен");
+    if (!ok) throw lastErr || new Error("Источник недоступен");
+
+    // тайминги опенинга/эндинга сохраняем вместе с серией — чтобы пропуск работал без интернета
+    if (this.resolveSkips && it.skip === undefined) {
+      it.skip = await this.resolveSkips(it).catch(() => undefined);
+    }
+  }
+
+  // ---------- выгрузка серии одним файлом ----------
+
+  // Путь к готовому видеофайлу или список кусков HLS
+  async exportInfo(id) {
+    const it = this.get(id);
+    if (!it || it.status !== "done") throw new Error("Серия ещё не скачана");
+    const dir = path.join(this.dir, it.id);
+    if (it.kind === "file") return { it, file: path.join(dir, it.entry), ext: path.extname(it.entry).slice(1) || "mp4" };
+    const names = (await fsp.readdir(dir)).sort();
+    if (names.some((n) => n.startsWith("extra"))) {
+      throw new Error("Эта серия скачана в зашифрованном виде — одним файлом её сохранить нельзя");
+    }
+    return { it, segments: names.filter((n) => /^s\d+\.ts$/.test(n)).map((n) => path.join(dir, n)), ext: "ts" };
+  }
+
+  // Копирует MP4 или склеивает куски HLS (MPEG-TS склеивается как есть) в один файл
+  async exportTo(id, target) {
+    const info = await this.exportInfo(id);
+    if (info.file) {
+      await fsp.copyFile(info.file, target);
+      return target;
+    }
+    const out = fs.createWriteStream(target);
+    try {
+      for (const seg of info.segments) {
+        await pipeline(fs.createReadStream(seg), out, { end: false });
+      }
+    } finally {
+      await new Promise((r) => out.end(r));
+    }
+    return target;
   }
 
   async _downloadHls(it, url, dir, signal) {
@@ -367,9 +431,14 @@ class DownloadManager {
     it.entry = "index.m3u8";
   }
 
-  async _downloadFile(it, url, dir, signal) {
+  async _downloadFile(it, url, dir, signal, { requireVideo = false } = {}) {
     const res = await fetchOk(url, signal);
     const type = (res.headers.get("content-type") || "").split(";")[0].trim();
+    const total0 = Number(res.headers.get("content-length")) || 0;
+    if (requireVideo && (/text|html|json|mpegurl/i.test(type) || (total0 && total0 < 1_000_000))) {
+      await res.body?.cancel();
+      throw new Error(`не видео (${type || "без типа"}, ${total0} байт)`);
+    }
     const ext = type.includes("webm") ? "webm" : "mp4";
     const total = Number(res.headers.get("content-length")) || 0;
     const name = `video.${ext}`;
@@ -476,4 +545,4 @@ function createMediaHandler(manager) {
   };
 }
 
-module.exports = { DownloadManager, createMediaHandler, planMediaPlaylist, pickVariant, isHlsSource };
+module.exports = { DownloadManager, createMediaHandler, planMediaPlaylist, pickVariant, isHlsSource, directMp4 };

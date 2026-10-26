@@ -409,3 +409,15 @@ body.playing .toast { display: none; }
 }
 .player.pip .p-boost { display: none !important; }
 .player { -webkit-touch-callout: none; }
+
+/* опенинг/эндинг на полосе и кнопка пропуска */
+.p-seek-wrap { position: relative; }
+.p-marks { position: absolute; left: 9px; right: 9px; top: 50%; height: 4px; transform: translateY(-50%); pointer-events: none; }
+.p-mark { position: absolute; top: 0; bottom: 0; background: rgba(255, 196, 60, .75); border-radius: 2px; }
+.p-skipseg {
+  position: absolute; right: max(18px, env(safe-area-inset-right)); bottom: 84px;
+  background: rgba(16,20,40,.9); color: #fff; border: 1px solid rgba(255,255,255,.35);
+  border-radius: 10px; padding: 11px 16px; font-weight: 600; z-index: 3;
+}
+.player.pip .p-skipseg { display: none !important; }
+.p-sleep { font-variant-numeric: tabular-nums; }

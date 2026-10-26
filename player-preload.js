@@ -19,4 +19,7 @@ contextBridge.exposeInMainWorld("player", {
   onLoad(callback) {
     ipcRenderer.on("player:load", (_e, value) => callback(value));
   },
+  onSkip(callback) {
+    ipcRenderer.on("player:skip", (_e, value) => callback(value));
+  },
 });

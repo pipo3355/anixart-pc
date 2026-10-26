@@ -4,7 +4,8 @@ import { prefs } from "./storage.js";
 
 const DEFAULTS = {
   seekStep: 10, // двойное касание слева/справа, секунд
-  skipOpening: 85, // кнопка «пропустить», секунд
+  skipOpening: 85, // кнопка «пропустить», если точных таймингов нет, секунд
+  skipMode: "button", // опенинг/эндинг: auto | button | off
   speed: 1,
   quality: "720", // качество загрузки
   onlyWifi: false,

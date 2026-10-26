@@ -403,8 +403,13 @@ function renderSettings() {
       secondsField(st.seekStep, [5, 10, 15, 30], 1, 120, (n) => saveSettings({ seekStep: n })),
     ),
     el("section", { class: "setting" },
-      el("h2", { text: "Пропуск опенинга" }),
-      el("p", { text: "На сколько секунд вперёд прыгает Shift+→ и кнопка «Пропустить опенинг» в плеере. Обычный опенинг — около 90 секунд." }),
+      el("h2", { text: "Опенинг и эндинг" }),
+      el("p", { text: "Точные отрезки берутся с Kodik или из базы AniSkip и видны на полосе перемотки. Сохраняются вместе со скачанной серией — работают и без интернета." }),
+      segmented([["auto", "Пропускать сразу"], ["button", "Показывать кнопку"], ["off", "Не пропускать"]], st.skipMode || "button", (v) => saveSettings({ skipMode: v })),
+    ),
+    el("section", { class: "setting" },
+      el("h2", { text: "Пропуск опенинга без таймингов" }),
+      el("p", { text: "Если точных отрезков для серии нет, Shift+→ и кнопка «Пропустить опенинг» просто перематывают вперёд на столько секунд. Обычный опенинг — около 90 секунд." }),
       secondsField(st.skipOpening, [80, 85, 90, 120], 1, 600, (n) => saveSettings({ skipOpening: n })),
     ),
     aboutSection(),
@@ -509,7 +514,20 @@ const dlOpen = new Set(); // какие тайтлы в «Загрузках» �
 // Кнопки для одной серии
 function episodeDlActions(d) {
   const actions = [];
-  if (d.status === "done") actions.push(el("button", { text: "▶", title: "Смотреть", onclick: () => playDownload(d.id) }));
+  if (d.status === "done") {
+    actions.push(el("button", { text: "▶", title: "Смотреть", onclick: () => playDownload(d.id) }));
+    actions.push(el("button", {
+      class: "ghost", text: "💾", title: "Сохранить одним видеофайлом",
+      onclick: async () => {
+        try {
+          const saved = await call(window.api.exportDownload, d.id);
+          if (saved) toast("Сохранено");
+        } catch (err) {
+          toast(err.message, true);
+        }
+      },
+    }));
+  }
   if (isActive(d)) {
     actions.push(el("button", { class: "ghost", text: "⏸", title: "Остановить (можно продолжить)", onclick: () => dlAction(window.api.cancelDownload, d.id) }));
   }
@@ -930,6 +948,8 @@ async function openPlayer(ctx, ep) {
     const res = await call(window.api.openPlayer, {
       releaseId: ctx.release.id,
       releaseTitle: ctx.release.title_ru || ctx.release.title_original,
+      releaseOriginal: ctx.release.title_original || "",
+      releaseYear: ctx.release.year || null,
       sourceId: ctx.sourceId,
       position: ep.position,
       episodes: ctx.eps.map((e) => ({ position: e.position, name: e.name, url: e.url })),
@@ -955,6 +975,8 @@ async function downloadEpisodes(ctx, eps) {
     .map((ep) => ({
       releaseId: ctx.release.id,
       releaseTitle: ctx.release.title_ru || ctx.release.title_original,
+      releaseOriginal: ctx.release.title_original || "",
+      releaseYear: ctx.release.year || null,
       poster: ctx.release.image,
       dubberName: ctx.dubberName,
       sourceId: ctx.sourceId,
