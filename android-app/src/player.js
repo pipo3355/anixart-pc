@@ -63,6 +63,7 @@ class Player {
     root.innerHTML = `
       <video playsinline webkit-playsinline preload="auto"></video>
       <div class="p-gesture"></div>
+      <div class="p-boost" hidden></div>
       <div class="p-swipe" hidden><b class="p-swipe-delta"></b><span class="p-swipe-to"></span></div>
       <div class="p-ripple left"><span></span></div>
       <div class="p-ripple right"><span></span></div>
@@ -131,6 +132,7 @@ class Player {
 
   async close() {
     if (!this.ctx) return;
+    if (this.stopBoost) this.stopBoost();
     this.report(true);
     this.stopCountdown();
     if (this.hls) { this.hls.destroy(); this.hls = null; }
@@ -214,6 +216,7 @@ class Player {
   }
 
   async load() {
+    if (this.stopBoost) this.stopBoost();
     const it = this.current();
     this.marked = false;
     this.stopCountdown();
@@ -417,7 +420,7 @@ class Player {
     v.addEventListener("timeupdate", () => this.report());
     v.addEventListener("pause", () => { this.updatePlayIcon(); this.report(true); this.showUi(); });
     v.addEventListener("play", () => { this.updatePlayIcon(); this.showUi(); });
-    v.addEventListener("ratechange", () => this.updateSpeedLabel());
+    v.addEventListener("ratechange", () => { if (this.boostedFrom == null) this.updateSpeedLabel(); });
     v.addEventListener("ended", () => { this.report(true); this.startCountdown(); });
     v.addEventListener("error", () => this.toast("Не удалось открыть файл серии. Удалите её и скачайте заново.", 6000));
 
@@ -440,6 +443,30 @@ class Player {
     let touch = null; // { id, x, y, t0, swiping, target }
     let swallowClick = false;
 
+    // Долгое нажатие: пока палец на экране — скорость ×2 от текущей (×1.5 → ×3)
+    const HOLD_MS = 450;
+    let holdTimer = null;
+    const boostBox = $(".p-boost", this.root);
+    this.stopBoost = () => {
+      clearTimeout(holdTimer);
+      holdTimer = null;
+      if (this.boostedFrom == null) return;
+      v.playbackRate = this.boostedFrom;
+      this.boostedFrom = null;
+      boostBox.hidden = true;
+    };
+    const startBoost = () => {
+      holdTimer = null;
+      if (!touch || touch.swiping || this.boostedFrom != null) return;
+      this.boostedFrom = v.playbackRate || 1;
+      v.playbackRate = Math.min(16, this.boostedFrom * 2);
+      if (v.paused) v.play().catch(() => {});
+      boostBox.textContent = `▶▶ ×${+v.playbackRate.toFixed(2)}`;
+      boostBox.hidden = false;
+      clearTimeout(tapTimer);
+      try { navigator.vibrate && navigator.vibrate(15); } catch {}
+    };
+
     const swipeSeconds = (dx) => {
       // весь экран по ширине = 2 минуты (или вся серия, если она короче); к краям быстрее
       const span = Math.min(v.duration || 120, 120);
@@ -450,12 +477,16 @@ class Player {
     gesture.addEventListener("pointerdown", (e) => {
       if (this.locked || !v.duration) return;
       touch = { id: e.pointerId, x: e.clientX, y: e.clientY, t0: v.currentTime, swiping: false, target: v.currentTime };
+      clearTimeout(holdTimer);
+      holdTimer = setTimeout(startBoost, HOLD_MS);
     });
     gesture.addEventListener("pointermove", (e) => {
       if (!touch || e.pointerId !== touch.id) return;
       const dx = e.clientX - touch.x;
       const dy = e.clientY - touch.y;
+      if (this.boostedFrom != null) return; // во время ускорения палец может двигаться
       if (!touch.swiping) {
+        if (Math.abs(dx) > 12 || Math.abs(dy) > 12) { clearTimeout(holdTimer); holdTimer = null; }
         if (Math.abs(dx) < 18 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
         touch.swiping = true;
         try { gesture.setPointerCapture(e.pointerId); } catch {}
@@ -473,6 +504,15 @@ class Player {
     });
     const endSwipe = (e) => {
       if (!touch || (e && e.pointerId !== touch.id)) return;
+      clearTimeout(holdTimer);
+      holdTimer = null;
+      if (this.boostedFrom != null) {
+        this.stopBoost();
+        swallowClick = true; // отпускание после долгого нажатия — не касание
+        setTimeout(() => { swallowClick = false; }, 350);
+        touch = null;
+        return;
+      }
       if (touch.swiping) {
         v.currentTime = touch.target;
         swallowClick = true; // после свайпа браузер пришлёт «клик» — его не считаем касанием
@@ -485,8 +525,10 @@ class Player {
     };
     gesture.addEventListener("pointerup", endSwipe);
     gesture.addEventListener("pointercancel", () => {
+      this.stopBoost();
       if (touch) { swipeBox.hidden = true; this.seeking = false; touch = null; }
     });
+    gesture.addEventListener("contextmenu", (e) => e.preventDefault()); // долгое нажатие не открывает меню
 
     gesture.addEventListener("click", (e) => {
       if (swallowClick) { swallowClick = false; this.showUi(); return; }

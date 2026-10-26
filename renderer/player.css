@@ -160,3 +160,17 @@ input[type="range"]:active::-webkit-slider-thumb { opacity: 1; }
   font-variant-numeric: tabular-nums;
   pointer-events: none;
 }
+
+/* ускорение, пока зажат пробел */
+.boost {
+  position: fixed;
+  top: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(26,26,30,.85);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}

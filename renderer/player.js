@@ -96,6 +96,7 @@ function saveQuality(q) {
 const isHls = (s) => /m3u8/i.test(s.src) || /mpegurl/i.test(s.type || "");
 
 function play(source, startAt = 0) {
+  stopBoost();
   clearTimeout(seekTimer);
   seekTarget = null;
   message.hidden = true;
@@ -456,7 +457,7 @@ document.addEventListener("mousedown", (e) => {
 // не обработал ещё кто-то (кнопка в фокусе, ползунок и т. п.) и не было двойного срабатывания.
 
 const KEYS = {
-  " ": () => togglePlay(), k: () => togglePlay(), "л": () => togglePlay(),
+  k: () => togglePlay(), "л": () => togglePlay(),
   f: () => toggleFullscreen(), "а": () => toggleFullscreen(),
   m: () => muteBtn.click(), "ь": () => muteBtn.click(),
   n: () => go(1), "т": () => go(1),
@@ -467,8 +468,55 @@ const KEYS = {
   arrowdown: () => { video.volume = Math.max(0, video.volume - 0.1); },
 };
 
+// ---------- Пробел: коротко — пауза, зажать — ускорение ×2 ----------
+// Пока пробел зажат, скорость удваивается от текущей (×1 → ×2, ×2 → ×4),
+// отпустил — вернулась прежняя.
+
+const HOLD_MS = 300;
+let spaceTimer = null;
+let boostedFrom = null;
+
+function startBoost() {
+  if (boostedFrom != null) return;
+  boostedFrom = video.playbackRate || 1;
+  video.playbackRate = Math.min(16, boostedFrom * 2);
+  if (video.paused) video.play().catch(() => {});
+  $("boost").textContent = `▶▶ ×${+video.playbackRate.toFixed(2)}`;
+  $("boost").hidden = false;
+}
+
+function stopBoost() {
+  if (boostedFrom == null) return;
+  video.playbackRate = boostedFrom;
+  boostedFrom = null;
+  $("boost").hidden = true;
+}
+
+function spaceDown(e) {
+  if (e.repeat || spaceTimer) return; // зажатый пробел шлёт повторы — первого достаточно
+  spaceTimer = setTimeout(startBoost, HOLD_MS);
+}
+
+function spaceUp() {
+  if (!spaceTimer && boostedFrom == null) return;
+  clearTimeout(spaceTimer);
+  spaceTimer = null;
+  if (boostedFrom != null) stopBoost();
+  else togglePlay(); // короткое нажатие
+}
+
+// окно потеряло фокус с зажатым пробелом — отпускания не будет, сбрасываем
+window.addEventListener("blur", () => { clearTimeout(spaceTimer); spaceTimer = null; stopBoost(); });
+
 window.addEventListener("keydown", (e) => {
   if (e.target === qualitySelect || e.ctrlKey || e.altKey || e.metaKey) return;
+  if (e.key === " ") {
+    e.preventDefault();
+    e.stopPropagation();
+    spaceDown(e);
+    wake();
+    return;
+  }
   const action = KEYS[e.key.toLowerCase()];
   if (!action) return;
   e.preventDefault();
@@ -483,6 +531,7 @@ window.addEventListener("keyup", (e) => {
   if (e.key === " " && e.target !== qualitySelect) {
     e.preventDefault();
     e.stopPropagation();
+    spaceUp();
   }
 }, true);
 

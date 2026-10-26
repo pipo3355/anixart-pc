@@ -400,3 +400,12 @@ body.playing .toast { display: none; }
   background: rgba(16,20,40,.92); border-radius: 12px; padding: 10px 16px; font-size: 14px;
 }
 .player.pip .p-swipe, .player.pip .p-wait { display: none !important; }
+
+/* ускорение при долгом нажатии */
+.p-boost {
+  position: absolute; top: max(18px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
+  background: rgba(10,14,32,.82); border-radius: 999px; padding: 6px 16px;
+  font-weight: 700; font-variant-numeric: tabular-nums; pointer-events: none; z-index: 3;
+}
+.player.pip .p-boost { display: none !important; }
+.player { -webkit-touch-callout: none; }
