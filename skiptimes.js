@@ -8,6 +8,7 @@
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36";
 const TIMEOUT_MS = 12_000;
+const SHIKI_HOSTS = ["shikimori.io", "shikimori.one"];
 const malCache = new Map(); // releaseId -> MAL ID | null
 
 async function getJson(url) {
@@ -63,7 +64,12 @@ function cleanTitle(t) {
 async function searchShikimori(query, year) {
   if (!query) return null;
   try {
-    const list = await getJson(`https://shikimori.one/api/animes?search=${encodeURIComponent(query)}&limit=5`);
+    // Shikimori переехал на shikimori.io, старый домен держим запасным
+    let list = null;
+    for (const host of SHIKI_HOSTS) {
+      try { list = await getJson(`https://${host}/api/animes?search=${encodeURIComponent(query)}&limit=5`); } catch { list = null; }
+      if (Array.isArray(list)) break;
+    }
     if (!Array.isArray(list) || !list.length) return null;
     // при нескольких совпадениях предпочитаем тот же год выхода
     const byYear = year && list.find((a) => String(a.aired_on || "").startsWith(String(year)));

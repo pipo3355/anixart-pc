@@ -354,13 +354,21 @@ class Downloads {
   }
 
   // Тайминги опенинга/эндинга — сохраняем вместе с серией, чтобы пропуск работал офлайн
+  // Нужно ли искать тайминги: ещё не искали или не нашли давно (могли быть без сети)
+  needsSkips(it) {
+    if (it.skip === undefined) return true;
+    return it.skip === null && Date.now() - (it.skipCheckedAt || 0) > 3 * 24 * 3600e3;
+  }
+
   async fetchSkips(it) {
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return it.skip;
     try {
       const found = await getSkipTimes(
         { id: it.releaseId, titleOriginal: it.releaseOriginal, titleRu: it.releaseTitle, year: it.releaseYear },
         { position: it.position, url: it.url },
       );
       it.skip = found ? { op: found.op, ed: found.ed } : null;
+      it.skipCheckedAt = Date.now(); // «не нашли» перепроверим через несколько дней
       if (found) console.log(`[skip] ${it.releaseTitle} #${it.position}: ${found.source}`);
     } catch {
       it.skip = undefined;

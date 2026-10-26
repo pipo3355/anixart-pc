@@ -232,7 +232,7 @@ class Player {
     this.skipped = { op: false, ed: false };
     $(".p-marks", this.root).replaceChildren();
     $(".p-skipseg", this.root).hidden = true;
-    if (it.skip === undefined) {
+    if (downloads.needsSkips(it)) {
       // тайминги ещё не искали (серия скачана старой версией) — ищем, пока есть интернет
       downloads.fetchSkips(it).then((skip) => {
         if (this.ctx && this.current().id === it.id && skip) { this.skip = skip; this.drawMarks(); }
