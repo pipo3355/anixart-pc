@@ -10,6 +10,7 @@ import { downloads } from "./downloads.js";
 import { settings } from "./settings.js";
 import { player } from "./player.js";
 import { Device } from "./device.js";
+import { createUpdater } from "./updater.js";
 
 installNativeFetch();
 
@@ -690,17 +691,47 @@ function renderProfile(view) {
     ),
     logBox));
 
-  const upd = state.update;
-  view.append(el("div", { class: "card" },
+  view.append(aboutCard());
+}
+
+function updateText(u) {
+  switch (u.status) {
+    case "checking": return "Проверяю обновления…";
+    case "available": return `Доступна версия ${u.version}${u.size ? ` (${fmtSize(u.size)})` : ""}`;
+    case "downloading": return `Скачиваю обновление ${u.version}… ${u.percent || 0}%`;
+    case "ready": return u.needPermission
+      ? "Разрешите установку из этого приложения в открывшихся настройках и вернитесь назад"
+      : `Версия ${u.version} скачана — подтвердите установку`;
+    case "none": return "У вас последняя версия";
+    case "error": return u.error || "Ошибка обновления";
+    default: return "";
+  }
+}
+
+function aboutCard() {
+  const u = updater.state;
+  const main = {
+    available: el("button", { class: "primary", text: "⤓ Обновить", onclick: () => updater.download() }),
+    downloading: el("button", { class: "primary", text: `Скачивается… ${u.percent || 0}%`, disabled: true }),
+    ready: el("button", { class: "primary", text: "Установить", onclick: () => updater.install() }),
+  }[u.status] || el("button", {
+    class: "ghost", text: "Проверить обновления", disabled: u.status === "checking",
+    onclick: async () => {
+      const r = await updater.check();
+      if (r.status === "none") toast("У вас последняя версия");
+    },
+  });
+  const card = el("div", { class: "card", id: "about-card" },
     el("h2", { text: "О приложении" }),
     el("div", { class: "row-sub", text: `Anixart Offline ${APP_VERSION}. Неофициальное приложение, не связано с разработчиками Anixart.` }),
-    upd ? el("div", { class: "row-sub accent", text: `Доступна версия ${upd.version}` }) : null,
+    updateText(u) ? el("div", { class: "row-sub" + (u.status === "error" ? " err" : " accent"), text: updateText(u) }) : null,
+    u.status === "downloading" ? el("div", { class: "bar-bg" }, el("div", { class: "bar-fg", style: `width:${u.percent || 0}%` })) : null,
     el("div", { class: "btn-row" },
-      upd ? el("button", { class: "primary", text: "Скачать обновление", onclick: () => openExternal(upd.url) })
-        : el("button", { class: "ghost", text: "Проверить обновления", onclick: () => checkUpdate(true) }),
+      main,
       el("button", { class: "ghost", text: "🐞 Сообщить о проблеме", onclick: () => openExternal(issueUrl("bug.yml")) }),
       el("button", { class: "ghost", text: "💡 Идея", onclick: () => openExternal(issueUrl("idea.yml")) }),
-    )));
+    ));
+  return card;
 }
 
 function issueUrl(template) {
@@ -711,32 +742,19 @@ function issueUrl(template) {
   return u.toString();
 }
 
-// ---------- обновления (релизы android-v* на GitHub) ----------
+// ---------- обновления (релизы android-v* на GitHub, ставятся изнутри приложения) ----------
 
-function newer(a, b) {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  for (let i = 0; i < 3; i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0);
-  return false;
-}
-
-async function checkUpdate(manual = false) {
-  try {
-    const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=30`, { headers: { Accept: "application/vnd.github+json" } });
-    const list = await res.json();
-    const rel = (Array.isArray(list) ? list : []).find((r) => /^android-v/.test(r.tag_name) && !r.draft);
-    if (!rel) { if (manual) toast("Обновлений нет"); return; }
-    const version = rel.tag_name.replace(/^android-v/, "");
-    const apk = (rel.assets || []).find((a) => a.name.endsWith(".apk"));
-    if (newer(version, APP_VERSION)) {
-      state.update = { version, url: apk ? apk.browser_download_url : rel.html_url };
-      toast(`Доступна новая версия ${version} — см. «Профиль»`, false, 4000);
-      if (state.tab === "profile" && !state.stack.length) render();
-    } else if (manual) toast("У вас последняя версия");
-  } catch {
-    if (manual) toast("Не удалось проверить обновления", true);
-  }
-}
+const updater = createUpdater(APP_VERSION);
+let lastUpdateStatus = null;
+updater.on((u) => {
+  if (u.status === "available" && lastUpdateStatus !== "available") toast(`Доступна версия ${u.version} — обновить можно в «Профиле»`, false, 4000);
+  lastUpdateStatus = u.status;
+  // карточку «О приложении» обновляем на месте, не перерисовывая весь профиль
+  const card = document.getElementById("about-card");
+  if (card) card.replaceWith(aboutCard());
+  const dot = document.querySelector('#tabs button[data-tab="profile"]');
+  if (dot) dot.classList.toggle("has-update", u.status === "available" || u.status === "ready");
+});
 
 // ---------- события ----------
 
@@ -771,6 +789,6 @@ A.events.on((type, data) => {
   await downloads.init();
   state.downloads = downloads.list();
   render();
-  if (isNative()) setTimeout(() => checkUpdate(false), 5000);
-  else window.__app = { downloads, player, state, render }; // для отладки в браузере
+  if (isNative()) setTimeout(() => updater.check(), 5000);
+  else window.__app = { downloads, player, state, render, updaterCheck: () => updater.check() }; // для отладки в браузере
 })();

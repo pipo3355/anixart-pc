@@ -1,7 +1,12 @@
 package io.github.pipo3355.anixartoffline;
 
 import android.app.PictureInPictureParams;
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Build;
+import android.provider.Settings;
+
+import androidx.core.content.FileProvider;
 import android.os.StatFs;
 import android.util.Rational;
 
@@ -63,6 +68,55 @@ public class DevicePlugin extends Plugin {
         JSObject data = new JSObject();
         data.put("active", active);
         notifyListeners("pipChanged", data);
+    }
+
+    /** Можно ли этому приложению ставить APK (Android 8+ спрашивает отдельно). */
+    @PluginMethod
+    public void canInstall(PluginCall call) {
+        JSObject ret = new JSObject();
+        ret.put("allowed", Build.VERSION.SDK_INT < Build.VERSION_CODES.O
+                || getContext().getPackageManager().canRequestPackageInstalls());
+        call.resolve(ret);
+    }
+
+    /** Открыть системный экран «Разрешить установку из этого источника» для нашего приложения. */
+    @PluginMethod
+    public void openInstallSettings(PluginCall call) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Intent intent = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:" + getContext().getPackageName()));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+        }
+        call.resolve();
+    }
+
+    /**
+     * Запустить установку скачанного APK. path — путь файла внутри кэша приложения
+     * (как его отдаёт Filesystem.getUri в Directory.Cache, «file://…» или без схемы).
+     */
+    @PluginMethod
+    public void installApk(PluginCall call) {
+        String path = call.getString("path");
+        if (path == null) { call.reject("Не указан файл"); return; }
+        if (path.startsWith("file://")) path = Uri.parse(path).getPath();
+        File file = new File(path);
+        if (!file.exists()) { call.reject("Файл обновления не найден"); return; }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                && !getContext().getPackageManager().canRequestPackageInstalls()) {
+            call.reject("Нужно разрешить установку из этого приложения", "NEED_PERMISSION");
+            return;
+        }
+        try {
+            Uri uri = FileProvider.getUriForFile(getContext(), getContext().getPackageName() + ".fileprovider", file);
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setDataAndType(uri, "application/vnd.android.package-archive");
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("Не удалось открыть установщик: " + e.getMessage());
+        }
     }
 
     @PluginMethod

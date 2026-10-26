@@ -63,6 +63,7 @@ class Player {
     root.innerHTML = `
       <video playsinline webkit-playsinline preload="auto"></video>
       <div class="p-gesture"></div>
+      <div class="p-swipe" hidden><b class="p-swipe-delta"></b><span class="p-swipe-to"></span></div>
       <div class="p-ripple left"><span></span></div>
       <div class="p-ripple right"><span></span></div>
       <div class="p-ui">
@@ -94,6 +95,7 @@ class Player {
       <button class="p-unlock" data-a="unlock" hidden>${I.lock}</button>
       <div class="p-toast" hidden></div>
       <div class="p-menu" hidden><div class="p-menu-box"></div></div>
+      <div class="p-wait" hidden></div>
       <div class="p-upnext" hidden>
         <div>Следующая серия через <b class="p-count">5</b>…</div>
         <div class="p-upnext-row"><button data-a="upnext-cancel" class="ghost">Отмена</button><button data-a="upnext-go">Смотреть</button></div>
@@ -115,6 +117,7 @@ class Player {
     document.body.classList.add("playing");
     this.locked = false;
     this.applyLock();
+    this.offDownloads = downloads.on((list) => this.syncItems(list));
     this.backHandle = await App.addListener("backButton", () => this.close());
     this.pipHandle = await Device.addListener("pipChanged", ({ active }) => {
       this.root.classList.toggle("pip", active);
@@ -137,6 +140,9 @@ class Player {
     this.root.hidden = true;
     document.body.classList.remove("playing");
     this.ctx = null;
+    this.waitFor = null;
+    $(".p-wait", this.root).hidden = true;
+    if (this.offDownloads) { this.offDownloads(); this.offDownloads = null; }
     if (this.backHandle) { this.backHandle.remove(); this.backHandle = null; }
     if (this.pipHandle) { this.pipHandle.remove(); this.pipHandle = null; }
     try { await ScreenOrientation.unlock(); } catch {}
@@ -147,6 +153,66 @@ class Player {
 
   current() { return this.ctx.items[this.ctx.index]; }
 
+  // Список серий в плеере = все скачанные серии тайтла. Если, пока смотришь,
+  // докачалась ещё одна — она сразу появляется в очереди (кнопка ⏭, автопереход).
+  syncItems(list) {
+    if (!this.ctx) return;
+    const cur = this.current();
+    const done = list
+      .filter((d) => d.releaseId === cur.releaseId && d.status === "done")
+      .sort((a, b) => a.position - b.position)
+      .filter((d, i, arr) => i === 0 || arr[i - 1].position !== d.position);
+    if (!done.some((d) => d.position === cur.position)) return; // текущую удалили — не трогаем
+    const known = new Set(this.ctx.items.map((d) => d.position));
+    this.ctx.items = done;
+    this.ctx.index = done.findIndex((d) => d.position === cur.position);
+    this.updateNavButtons();
+    if (this.waitFor == null) {
+      const added = done.find((d) => !known.has(d.position) && d.position > cur.position);
+      if (added) this.toast(`Скачалась ${added.name} — добавлена в очередь`, 2500);
+    }
+    // ждали следующую серию — она готова
+    if (this.waitFor != null) {
+      const ready = done.find((d) => d.position === this.waitFor);
+      if (ready) {
+        this.waitFor = null;
+        $(".p-wait", this.root).hidden = true;
+        this.ctx.index = done.indexOf(ready);
+        this.load();
+      } else {
+        this.renderWait(list);
+      }
+    }
+  }
+
+  updateNavButtons() {
+    $('[data-a="prev"]', this.root).disabled = this.ctx.index === 0;
+    $('[data-a="next"]', this.root).disabled = this.ctx.index >= this.ctx.items.length - 1 && !this.nextPending(downloads.list());
+  }
+
+  // Следующая по номеру серия, которая ещё качается или стоит в очереди
+  nextPending(list) {
+    const cur = this.current();
+    return list
+      .filter((d) => d.releaseId === cur.releaseId && d.position > cur.position && (d.status === "queued" || d.status === "downloading"))
+      .sort((a, b) => a.position - b.position)[0] || null;
+  }
+
+  renderWait(list) {
+    const d = list.find((x) => x.releaseId === this.current().releaseId && x.position === this.waitFor);
+    const box = $(".p-wait", this.root);
+    if (!d || (d.status !== "queued" && d.status !== "downloading")) {
+      this.waitFor = null;
+      box.hidden = true;
+      this.toast("Следующую серию не удалось скачать", 3000);
+      return;
+    }
+    box.textContent = d.status === "downloading"
+      ? `${d.name} ещё качается — ${Math.floor((d.progress || 0) * 100)}%. Включится сама, как только скачается`
+      : `${d.name} в очереди на загрузку. Включится сама, как только скачается`;
+    box.hidden = false;
+  }
+
   async load() {
     const it = this.current();
     this.marked = false;
@@ -154,8 +220,7 @@ class Player {
     $(".p-t1", this.root).textContent = this.ctx.releaseTitle;
     $(".p-t2", this.root).textContent = it.name;
     $(".p-q", this.root).textContent = /^\d+$/.test(it.quality || "") ? `${it.quality}p` : "Авто";
-    $('[data-a="prev"]', this.root).disabled = this.ctx.index === 0;
-    $('[data-a="next"]', this.root).disabled = this.ctx.index >= this.ctx.items.length - 1;
+    this.updateNavButtons();
 
     const src = await downloads.playUrl(it);
     const saved = await progressOf(it.releaseId, it.position);
@@ -187,6 +252,15 @@ class Player {
 
   async go(delta) {
     const i = this.ctx.index + delta;
+    if (delta > 0 && i >= this.ctx.items.length) {
+      const pending = this.nextPending(downloads.list());
+      if (pending) {
+        this.report(true);
+        this.waitFor = pending.position;
+        this.renderWait(downloads.list());
+      }
+      return;
+    }
     if (i < 0 || i >= this.ctx.items.length) return;
     this.report(true);
     this.ctx.index = i;
@@ -312,7 +386,12 @@ class Player {
   }
 
   startCountdown() {
-    if (this.ctx.index >= this.ctx.items.length - 1) { this.toast("Это была последняя скачанная серия", 3000); this.showUi(); return; }
+    if (this.ctx.index >= this.ctx.items.length - 1) {
+      if (this.nextPending(downloads.list())) { this.go(1); this.showUi(); return; }
+      this.toast("Это была последняя скачанная серия", 3000);
+      this.showUi();
+      return;
+    }
     let left = NEXT_DELAY;
     const box = $(".p-upnext", this.root);
     $(".p-count", box).textContent = left;
@@ -349,12 +428,68 @@ class Player {
       this.showUi();
     });
 
-    // Касания по видео: одно — показать/скрыть панели, двойное слева/справа — перемотка
+    // Касания по видео:
+    //  • одно — показать/скрыть панели;
+    //  • двойное слева/справа — перемотка на шаг из настроек;
+    //  • свайп влево/вправо — плавная перемотка, прыжок при отпускании пальца.
     const gesture = $(".p-gesture", this.root);
+    const swipeBox = $(".p-swipe", this.root);
     let lastTap = 0;
     let tapTimer = null;
     let streak = 0;
+    let touch = null; // { id, x, y, t0, swiping, target }
+    let swallowClick = false;
+
+    const swipeSeconds = (dx) => {
+      // весь экран по ширине = 2 минуты (или вся серия, если она короче); к краям быстрее
+      const span = Math.min(v.duration || 120, 120);
+      const ratio = dx / window.innerWidth;
+      return Math.sign(ratio) * Math.pow(Math.abs(ratio), 1.4) * span * 1.6;
+    };
+
+    gesture.addEventListener("pointerdown", (e) => {
+      if (this.locked || !v.duration) return;
+      touch = { id: e.pointerId, x: e.clientX, y: e.clientY, t0: v.currentTime, swiping: false, target: v.currentTime };
+    });
+    gesture.addEventListener("pointermove", (e) => {
+      if (!touch || e.pointerId !== touch.id) return;
+      const dx = e.clientX - touch.x;
+      const dy = e.clientY - touch.y;
+      if (!touch.swiping) {
+        if (Math.abs(dx) < 18 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+        touch.swiping = true;
+        try { gesture.setPointerCapture(e.pointerId); } catch {}
+        clearTimeout(tapTimer);
+        clearTimeout(this.hideTimer);
+        this.seeking = true;
+      }
+      touch.target = Math.max(0, Math.min(v.duration - 0.5, touch.t0 + swipeSeconds(dx)));
+      const delta = touch.target - touch.t0;
+      $(".p-swipe-delta", swipeBox).textContent = `${delta >= 0 ? "+" : "−"}${fmt(Math.abs(delta))}`;
+      $(".p-swipe-to", swipeBox).textContent = `${fmt(touch.target)} / ${fmt(v.duration)}`;
+      swipeBox.hidden = false;
+      this.seek.value = Math.round((touch.target / v.duration) * 1000);
+      this.updateTime();
+    });
+    const endSwipe = (e) => {
+      if (!touch || (e && e.pointerId !== touch.id)) return;
+      if (touch.swiping) {
+        v.currentTime = touch.target;
+        swallowClick = true; // после свайпа браузер пришлёт «клик» — его не считаем касанием
+        setTimeout(() => { swallowClick = false; }, 350);
+      }
+      swipeBox.hidden = true;
+      this.seeking = false;
+      touch = null;
+      this.updateTime();
+    };
+    gesture.addEventListener("pointerup", endSwipe);
+    gesture.addEventListener("pointercancel", () => {
+      if (touch) { swipeBox.hidden = true; this.seeking = false; touch = null; }
+    });
+
     gesture.addEventListener("click", (e) => {
+      if (swallowClick) { swallowClick = false; this.showUi(); return; }
       if (this.locked) { this.flashUnlock(); return; }
       const now = Date.now();
       const x = e.clientX / window.innerWidth;
@@ -387,7 +522,7 @@ class Player {
         case "back": this.close(); break;
         case "play": v.paused ? v.play().catch(() => {}) : v.pause(); this.showUi(); break;
         case "prev": this.go(-1); break;
-        case "next": this.go(1); break;
+        case "next": this.go(1); this.showUi(); break;
         case "skip": {
           const s = settings.get().skipOpening || 85;
           this.seekBy(s);
