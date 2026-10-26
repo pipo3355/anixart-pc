@@ -23,7 +23,7 @@ const REPO_URL = "https://github.com/pipo3355/anixart-pc";
 
 const client = new Anixart({});
 const REQ = { timeoutMs: 20_000 };
-const PARSE = { timeoutMs: 20_000 };
+const PARSE = { timeoutMs: 45_000 }; // цепочка из 2–3 запросов на медленной сети
 const PLAYER_PARTITION = "persist:player";
 const MEDIA_SCHEME = "anixdl"; // anixdl://media/<id>/<файл> — скачанные серии
 // Так приложение Anixart встраивает плееры; часть источников без этого отдаёт заглушку
@@ -656,8 +656,22 @@ function toQualityList(links) {
     .sort((a, b) => (parseInt(b.quality, 10) || 0) - (parseInt(a.quality, 10) || 0));
 }
 
+// Несколько попыток: источник иногда не отвечает с первого раза
 async function qualitiesFor(rawUrl) {
-  return toQualityList(await resolveDirectLinks(normalizeUrl(rawUrl)));
+  const url = normalizeUrl(rawUrl);
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const list = toQualityList(await resolveDirectLinks(url));
+      if (list.length) return list;
+      lastErr = new Error("Источник не отдал ссылку на видео");
+    } catch (err) {
+      lastErr = err;
+    }
+    console.warn(`[links] попытка ${attempt}/3 не удалась:`, lastErr && lastErr.message);
+    if (attempt < 3) await new Promise((r) => setTimeout(r, 2000 * attempt));
+  }
+  throw lastErr;
 }
 
 // ---------- Загрузки ----------
@@ -748,7 +762,7 @@ async function prepareEpisode(ctx) {
     title: `${ctx.releaseTitle} — ${label}`,
     position: ep.position,
     resumeAt: saved && saved.d && saved.t < saved.d - 30 && saved.t > 10 ? saved.t : 0,
-    hasNext: ctx.index < ctx.episodes.length - 1,
+    hasNext: queueInfo(ctx).hasNext,
     hasPrev: ctx.index > 0,
   };
 
@@ -824,8 +838,64 @@ handle("player:openDownload", async (id) => {
     sourceId: it.sourceId,
     episodes,
     index: Math.max(0, episodes.findIndex((e) => e.position === it.position)),
+    fromDownloads: true, // список серий = скачанные; докачавшиеся добавляются на ходу
   });
 });
+
+// ---------- Подхват серий, докачавшихся во время просмотра ----------
+
+function doneSiblings(releaseId) {
+  return downloads.list()
+    .filter((d) => d.releaseId === releaseId && d.status === "done")
+    .sort((a, b) => a.position - b.position)
+    .filter((d, i, arr) => i === 0 || arr[i - 1].position !== d.position);
+}
+
+// Следующая по номеру серия этого тайтла, которая ещё качается или ждёт в очереди
+function pendingAfter(ctx) {
+  const cur = ctx.episodes[ctx.index];
+  return downloads.list()
+    .filter((d) => d.releaseId === ctx.releaseId && d.position > cur.position && (d.status === "queued" || d.status === "downloading"))
+    .sort((a, b) => a.position - b.position)[0] || null;
+}
+
+function queueInfo(ctx) {
+  const pending = ctx.fromDownloads ? pendingAfter(ctx) : null;
+  return {
+    hasPrev: ctx.index > 0,
+    hasNext: ctx.index < ctx.episodes.length - 1 || Boolean(pending),
+    waiting: ctx.waitFor != null && pending
+      ? { name: pending.name, status: pending.status, percent: Math.floor((pending.progress || 0) * 100) }
+      : null,
+  };
+}
+
+function syncPlayersWithDownloads() {
+  for (const [id, ctx] of players) {
+    if (!ctx.fromDownloads || !ctx.current) continue;
+    const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && w.webContents.id === id);
+    if (!win) continue;
+    const cur = ctx.episodes[ctx.index];
+    const done = doneSiblings(ctx.releaseId);
+    if (!done.some((d) => d.position === cur.position)) continue; // текущую удалили — не трогаем
+    const known = new Set(ctx.episodes.map((e) => e.position));
+    ctx.episodes = done.map((d) => ({ position: d.position, name: d.name, url: d.url }));
+    ctx.index = ctx.episodes.findIndex((e) => e.position === cur.position);
+    const added = done.find((d) => !known.has(d.position) && d.position > cur.position);
+
+    // ждали эту серию — включаем сами
+    if (ctx.waitFor != null && done.some((d) => d.position === ctx.waitFor)) {
+      ctx.index = ctx.episodes.findIndex((e) => e.position === ctx.waitFor);
+      ctx.waitFor = null;
+      prepareEpisode(ctx)
+        .then((data) => showEpisode(win, ctx, data).then(() => win.webContents.send("player:load", data)))
+        .catch((e) => console.warn("[player] автозапуск:", e.message));
+      continue;
+    }
+    if (ctx.waitFor != null && !pendingAfter(ctx)) ctx.waitFor = null; // загрузку отменили или она упала
+    win.webContents.send("player:queue", { ...queueInfo(ctx), added: ctx.waitFor == null && added ? added.name : null });
+  }
+}
 
 // --- вызовы из окна плеера ---
 
@@ -857,7 +927,14 @@ handlePlayer("player:progress", async (sender, time, duration) => {
 async function step(sender, delta) {
   const ctx = ctxOf(sender);
   const nextIndex = ctx.index + delta;
+  if (delta > 0 && nextIndex >= ctx.episodes.length && ctx.fromDownloads) {
+    const pending = pendingAfter(ctx);
+    if (!pending) return null;
+    ctx.waitFor = pending.position; // включим, как только скачается
+    return { waiting: queueInfo(ctx).waiting };
+  }
   if (nextIndex < 0 || nextIndex >= ctx.episodes.length) return null;
+  ctx.waitFor = null;
   ctx.index = nextIndex;
   const data = await prepareEpisode(ctx);
   const win = BrowserWindow.fromWebContents(sender);
@@ -914,7 +991,10 @@ app.whenReady().then(async () => {
     dir: path.join(app.getPath("userData"), "downloads"),
     resolveLinks: qualitiesFor,
     isOnline: () => net.isOnline(),
-    onChange: (list) => sendToMain("downloads:changed", list),
+    onChange: (list) => {
+      sendToMain("downloads:changed", list);
+      syncPlayersWithDownloads();
+    },
   });
   await downloads.init();
   setupUpdater();

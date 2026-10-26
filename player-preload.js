@@ -12,4 +12,11 @@ contextBridge.exposeInMainWorld("player", {
   onSettings(callback) {
     ipcRenderer.on("settings:changed", (_e, value) => callback(value));
   },
+  // список серий изменился (докачалась новая) / пора включить дождавшуюся серию
+  onQueue(callback) {
+    ipcRenderer.on("player:queue", (_e, value) => callback(value));
+  },
+  onLoad(callback) {
+    ipcRenderer.on("player:load", (_e, value) => callback(value));
+  },
 });

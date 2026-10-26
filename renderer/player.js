@@ -259,8 +259,11 @@ async function go(direction) {
   try {
     const res = await (direction > 0 ? window.player.next() : window.player.prev());
     if (!res.ok) throw new Error(res.error);
-    // null — окно переключилось на плеер источника, эта страница сейчас закроется
-    if (res.data) {
+    if (res.data && res.data.waiting) {
+      // следующая серия ещё качается — включится сама
+      showWaiting(res.data.waiting);
+    } else if (res.data) {
+      // null — окно переключилось на плеер источника, эта страница сейчас закроется
       $("notice").hidden = true;
       load(res.data);
     }
@@ -274,6 +277,31 @@ async function go(direction) {
 
 $("next").addEventListener("click", () => go(1));
 $("prev").addEventListener("click", () => go(-1));
+
+// ---------- Подхват докачавшихся серий ----------
+
+function showWaiting(w) {
+  const text = w.status === "downloading"
+    ? `${w.name} ещё качается — ${w.percent}%. Включится сама, как только скачается`
+    : `${w.name} в очереди на загрузку. Включится сама, как только скачается`;
+  notice(text, 24 * 3600 * 1000);
+}
+
+window.player.onQueue((q) => {
+  if (!data) return;
+  data.hasNext = q.hasNext;
+  data.hasPrev = q.hasPrev;
+  $("next").hidden = !q.hasNext;
+  $("prev").hidden = !q.hasPrev;
+  if (q.waiting) showWaiting(q.waiting);
+  else if (q.added) notice(`Скачалась ${q.added} — добавлена в очередь`);
+});
+
+// дождались следующую серию — главный процесс уже подготовил её
+window.player.onLoad((next) => {
+  $("notice").hidden = true;
+  load(next);
+});
 
 // Автопереход после окончания серии
 let countdownTimer = null;
