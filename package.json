@@ -1,7 +1,7 @@
 {
   "name": "anixart-pc",
   "productName": "Anixart PC",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Неофициальный десктоп-клиент Anixart с синхронизацией аккаунта",
   "author": {
     "name": "pipo3355",
@@ -45,14 +45,14 @@
       ]
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
+      "oneClick": true,
       "perMachine": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Anixart PC",
       "deleteAppDataOnUninstall": false,
-      "artifactName": "Anixart-PC-Setup-${version}.${ext}"
+      "artifactName": "Anixart-PC-Setup-${version}.${ext}",
+      "runAfterFinish": true
     },
     "portable": {
       "artifactName": "Anixart-PC-${version}-portable.${ext}"
