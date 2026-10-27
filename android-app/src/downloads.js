@@ -6,7 +6,7 @@ import { Capacitor } from "@capacitor/core";
 import { Filesystem, Encoding } from "@capacitor/filesystem";
 import { FileTransfer } from "@capacitor/file-transfer";
 import { Network } from "@capacitor/network";
-import { DATA, readJson, writeJson, exists, removePath, serial } from "./storage.js";
+import { DATA, prefs, readJson, writeJson, exists, removePath, serial } from "./storage.js";
 import { qualitiesFor } from "./links.js";
 import { getSkipTimes } from "../../skiptimes.js";
 import { Device, later, sleep } from "./device.js";
@@ -177,6 +177,11 @@ class Downloads {
   async init() {
     this.items = (await readJson(INDEX, [])) || [];
     for (const it of this.items) if (it.status === "downloading") it.status = "queued";
+    // До 0.5.2 сбой сети при поиске таймингов записывался как «таймингов нет» — один раз ищем заново
+    if (!(await prefs.get("skipsRecheck2", false))) {
+      for (const it of this.items) if (it.skip === null) delete it.skip;
+      await prefs.set("skipsRecheck2", true);
+    }
     await this.persist();
     Network.addListener("networkStatusChange", () => this.next());
     this.next();
@@ -355,6 +360,8 @@ class Downloads {
 
   async run(it, signal) {
     console.log(`[download] ${it.releaseTitle} — ${it.name}: ищу ссылку`);
+    // тайминги ищем сразу, параллельно с загрузкой — они готовы раньше самой серии
+    const skipJob = this.needsSkips(it) ? this.fetchSkips(it).catch(() => {}) : null;
     const qualities = await qualitiesFor(it.url);
     const q = this.pickQuality(qualities, it.wantQuality);
     it.quality = q.quality;
@@ -391,7 +398,8 @@ class Downloads {
       }
     }
     if (!ok) throw lastErr || new Error("Источник недоступен");
-    if (it.skip === undefined) await this.fetchSkips(it);
+    if (skipJob) await skipJob;
+    if (it.skip === undefined) await this.fetchSkips(it); // первая попытка не удалась — ещё раз
   }
 
   // Тайминги опенинга/эндинга — сохраняем вместе с серией, чтобы пропуск работал офлайн
@@ -411,7 +419,9 @@ class Downloads {
       it.skip = found ? { op: found.op, ed: found.ed } : null;
       it.skipCheckedAt = Date.now(); // «не нашли» перепроверим через несколько дней
       if (found) console.log(`[skip] ${it.releaseTitle} #${it.position}: ${found.source}`);
-    } catch {
+    } catch (err) {
+      // не смогли спросить (сеть, ограничение запросов) — не запоминаем «нет», спросим ещё раз позже
+      console.warn(`[skip] ${it.releaseTitle} #${it.position}: не удалось получить тайминги —`, err && err.message);
       it.skip = undefined;
     }
     this.persist();

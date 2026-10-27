@@ -720,6 +720,12 @@ const SKIP_RETRY_MS = 3 * 24 * 3600 * 1000; // «не нашлось» пере�
 
 function loadSkips() {
   try { skips = JSON.parse(fs.readFileSync(skipsFile(), "utf8")); } catch { skips = {}; }
+  // До 0.10.1 сбой сети записывался как «таймингов нет» — один раз забываем такие отметки
+  if (!skips.__v2) {
+    for (const k of Object.keys(skips)) if (skips[k] && skips[k].none) delete skips[k];
+    skips.__v2 = true;
+    saveSkipsSoon();
+  }
 }
 function saveSkipsSoon() {
   clearTimeout(skipsTimer);
@@ -739,7 +745,14 @@ async function skipTimesFor(release, episode) {
       Object.assign(release, { titleOriginal: r.title_original, titleRu: r.title_ru, year: r.year });
     } catch {}
   }
-  const found = await getSkipTimes(release, episode).catch(() => null);
+  let found;
+  try {
+    found = await getSkipTimes(release, episode);
+  } catch (err) {
+    // не смогли спросить (сеть, ограничение запросов) — не запоминаем «нет», спросим в следующий раз
+    console.warn(`[skip] ${release.titleRu || release.titleOriginal} #${episode.position}: ${err.message}`);
+    return undefined;
+  }
   skips[key] = found || { none: true, at: Date.now() };
   saveSkipsSoon();
   if (found) console.log(`[skip] ${release.titleRu || release.titleOriginal} #${episode.position}:`, JSON.stringify(found));

@@ -354,7 +354,9 @@ class DownloadManager {
 
     // тайминги опенинга/эндинга сохраняем вместе с серией — чтобы пропуск работал без интернета
     if (this.resolveSkips && it.skip === undefined) {
+      // undefined — спросить не получилось (спросим ещё раз при просмотре), null — таймингов нет
       it.skip = await this.resolveSkips(it).catch(() => undefined);
+      if (it.skip === undefined) delete it.skip;
     }
   }
 
