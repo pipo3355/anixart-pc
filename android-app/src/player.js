@@ -317,7 +317,8 @@ class Player {
     this.attachStarted = false;
     this.attachResume = resumeAt;
     if (cand.hls && window.Hls && window.Hls.isSupported()) {
-      const cfg = { enableWorker: false, maxBufferHole: 0.5, backBufferLength: 90 };
+      // startPosition: hls.js сразу грузит нужное место, а не начало
+      const cfg = { enableWorker: false, maxBufferHole: 0.5, backBufferLength: 90, startPosition: resumeAt > 0 ? resumeAt : -1 };
       const loader = this.online ? proxyLoader(window.Hls) : null;
       if (loader) cfg.loader = loader; // undefined здесь сломал бы загрузчик по умолчанию
       this.hls = new window.Hls(cfg);
@@ -340,6 +341,14 @@ class Player {
     }
   }
 
+  // Где мы в серии. Пока новый источник (другое качество) не загрузился и не перемотан,
+  // <video> показывает 0 — тогда верим месту, куда собирались перейти.
+  position() {
+    const v = this.video;
+    if (this.attachStarted && v.readyState >= 1 && v.currentTime > 0.5) return v.currentTime;
+    return this.attachResume || v.currentTime || 0;
+  }
+
   tryNextSource(reason) {
     const next = this.candidates.shift();
     if (!next) {
@@ -347,7 +356,7 @@ class Player {
       return;
     }
     console.warn("[player] источник не открылся, пробую следующий:", reason);
-    const at = this.video.currentTime || this.attachResume || 0;
+    const at = this.position();
     if (this.hls) { this.hls.destroy(); this.hls = null; }
     this.quietResume = true;
     this.attach(next, at);
@@ -359,7 +368,7 @@ class Player {
     if (it.quality === quality) return;
     it.quality = quality;
     settings.set({ onlineQuality: quality });
-    this.resumeOverride = this.video.currentTime || 0;
+    this.resumeOverride = this.position();
     this.quietResume = true;
     this.load();
   }
@@ -399,6 +408,8 @@ class Player {
     if (!this.ctx) return;
     const v = this.video;
     if (!v.duration || !isFinite(v.duration)) return;
+    // новый источник ещё не перемотан на нужное место — не затираем прогресс нулём
+    if (this.attachResume > 0 && !(this.attachStarted && v.currentTime > 0.5)) return;
     const now = Date.now();
     if (!force && now - this.lastReport < 5000) return;
     this.lastReport = now;
