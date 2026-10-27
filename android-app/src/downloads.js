@@ -9,7 +9,7 @@ import { Network } from "@capacitor/network";
 import { DATA, readJson, writeJson, exists, removePath, serial } from "./storage.js";
 import { qualitiesFor } from "./links.js";
 import { getSkipTimes } from "../../skiptimes.js";
-import { Device } from "./device.js";
+import { Device, later, sleep } from "./device.js";
 
 const ROOT = "downloads";
 const INDEX = `${ROOT}/index.json`;
@@ -35,7 +35,7 @@ function headersFor(url) {
   return h;
 }
 
-const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+const delay = sleep; // работает и в свёрнутом приложении (см. device.js)
 // обрыв соединения (а не «сервер отказал» или «не видео»)
 const isNetworkError = (err) => !!err && (err.code === "NETWORK" || err instanceof TypeError
   || /network|timeout|timed out|connection|unreachable|reset|failed to fetch|обрыв|оборвал|не отвечает/i.test(String(err.message || "")));
@@ -166,8 +166,8 @@ class Downloads {
 
   notify(now = false) {
     const fire = () => { this._notifyTimer = null; for (const fn of this.listeners) try { fn(this.list()); } catch {} };
-    if (now) { clearTimeout(this._notifyTimer); fire(); return; }
-    if (!this._notifyTimer) this._notifyTimer = setTimeout(fire, 400);
+    if (now) { if (this._notifyTimer) this._notifyTimer.cancel(); fire(); return; }
+    if (!this._notifyTimer) this._notifyTimer = later(fire, 400);
   }
 
   persist() {
@@ -306,8 +306,8 @@ class Downloads {
     if (!it) { if (this.waiting) { this.waiting = false; this.notify(true); } return; }
     if (!(await this.canDownloadNow())) {
       if (!this.waiting) { this.waiting = true; this.notify(true); }
-      clearTimeout(this._waitTimer);
-      this._waitTimer = setTimeout(() => this.next(), 15_000);
+      if (this._waitTimer) this._waitTimer.cancel();
+      this._waitTimer = later(() => this.next(), 15_000);
       return;
     }
     if (this.active) return;
@@ -339,8 +339,9 @@ class Downloads {
       this.waiting = retryIn > 50;
       await this.persist();
       this.notify(true);
-      clearTimeout(this._waitTimer);
-      this._waitTimer = setTimeout(() => this.next(), retryIn);
+      if (this._waitTimer) this._waitTimer.cancel();
+      // таймер с нативной подстраховкой: следующая серия начнётся и в свёрнутом приложении
+      this._waitTimer = later(() => this.next(), retryIn);
     }
   }
 

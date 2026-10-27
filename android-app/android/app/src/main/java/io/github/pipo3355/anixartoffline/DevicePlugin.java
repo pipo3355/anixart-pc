@@ -71,6 +71,18 @@ public class DevicePlugin extends Plugin {
                 });
     }
 
+    private final android.os.Handler timers = new android.os.Handler(android.os.Looper.getMainLooper());
+
+    /**
+     * Таймер на стороне Android. Таймеры JS (setTimeout) в свёрнутом приложении замирают,
+     * а ответ плагина доходит до JS всегда — им загрузки и пользуются в фоне.
+     */
+    @PluginMethod
+    public void sleep(PluginCall call) {
+        int ms = Math.max(0, call.getInt("ms", 0));
+        timers.postDelayed(call::resolve, ms);
+    }
+
     @PluginMethod
     public void cancelDownload(PluginCall call) {
         String id = call.getString("id");

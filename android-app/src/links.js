@@ -1,11 +1,12 @@
 // Прямые ссылки на видео из страниц плееров (Kodik, Sibnet, …) — через парсеры AnixartJS.
 
 import { KodikParser, SibnetParser, RutubeParser, VKVideoParser, OKParser, AniLibriaParser } from "anixartjs";
+import { sleep } from "./device.js";
 
 // На мобильной сети цепочка из 2–3 запросов может идти долго — даём с запасом
 const PARSE = { timeoutMs: 45_000 };
 const ATTEMPTS = 3;
-const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+const delay = sleep; // повторы должны идти и в свёрнутом приложении
 
 export function normalizeUrl(raw) {
   if (!raw) throw new Error("У серии нет ссылки на видео");

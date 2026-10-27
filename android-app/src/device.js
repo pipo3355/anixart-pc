@@ -14,6 +14,19 @@ export const Device = registerPlugin("Device", {
     async downloadsActive() {},
     async downloadsIdle() {},
     async askNotifications() {},
+    async sleep({ ms }) { await new Promise((r) => setTimeout(r, ms)); },
     async addListener() { return { remove() {} }; },
   }),
 });
+
+// Таймер, который срабатывает и в свёрнутом приложении: setTimeout там замирает,
+// поэтому параллельно ставим нативный (Device.sleep) — что сработает раньше, то и вызовет fn.
+export function later(fn, ms) {
+  let done = false;
+  const fire = () => { if (done) return; done = true; clearTimeout(t); fn(); };
+  const t = setTimeout(fire, ms);
+  Device.sleep({ ms }).then(fire, () => {});
+  return { cancel() { done = true; clearTimeout(t); } };
+}
+
+export const sleep = (ms) => new Promise((r) => later(r, ms));

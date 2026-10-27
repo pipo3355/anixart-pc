@@ -2,7 +2,7 @@
 // (свёрнутое, с погашенным экраном) и показывает прогресс в уведомлении.
 
 import { Capacitor } from "@capacitor/core";
-import { Device } from "./device.js";
+import { Device, later } from "./device.js";
 
 const UPDATE_MS = 1500; // чаще обновлять уведомление незачем — Android сам режет частые обновления
 
@@ -17,8 +17,12 @@ export function keepDownloadsAlive(downloads) {
   const describe = (list) => {
     const active = list.find((it) => it.status === "downloading");
     const queued = list.filter((it) => it.status === "queued").length;
-    // связь пропала или сменилась — служба остаётся, чтобы продолжить сразу, как сеть вернётся
-    if (!active) return downloads.waiting && queued ? { text: `Жду интернет… · в очереди ${queued}`, progress: -1 } : null;
+    // Между сериями и без сети служба не выключается: из свёрнутого приложения Android
+    // не даст запустить её снова, и следующая серия ждала бы, пока приложение откроют.
+    if (!active) {
+      if (!queued) return null;
+      return { text: downloads.waiting ? `Жду интернет… · в очереди ${queued}` : `Начинаю следующую серию… · в очереди ${queued}`, progress: -1 };
+    }
     const pct = Math.round((active.progress || 0) * 100);
     let text = `${active.releaseTitle} — ${active.name} · ${pct}%`;
     if (queued) text += ` · ещё ${queued} в очереди`;
@@ -28,7 +32,7 @@ export function keepDownloadsAlive(downloads) {
   const sync = (list) => {
     const info = describe(list);
     if (!info) {
-      clearTimeout(timer);
+      if (timer) timer.cancel();
       timer = null;
       if (running) { running = false; Device.downloadsIdle().catch(() => {}); }
       return;
@@ -46,7 +50,7 @@ export function keepDownloadsAlive(downloads) {
     };
     const wait = UPDATE_MS - (Date.now() - lastSent);
     if (!running || wait <= 0) send();
-    else if (!timer) timer = setTimeout(send, wait);
+    else if (!timer) timer = later(send, wait);
   };
 
   downloads.on(sync);
