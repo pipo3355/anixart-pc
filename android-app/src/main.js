@@ -11,6 +11,7 @@ import { settings } from "./settings.js";
 import { player } from "./player.js";
 import { Device } from "./device.js";
 import { createUpdater } from "./updater.js";
+import { keepDownloadsAlive } from "./background.js";
 
 installNativeFetch();
 
@@ -794,6 +795,7 @@ A.events.on((type, data) => {
   await A.init();
   state.session = A.getSession();
   downloads.onlyWifi = settings.get().onlyWifi;
+  keepDownloadsAlive(downloads);
   await downloads.init();
   state.downloads = downloads.list();
   render();

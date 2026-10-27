@@ -119,6 +119,38 @@ public class DevicePlugin extends Plugin {
         }
     }
 
+    /** Идут загрузки: держать приложение живым в фоне и показать прогресс в уведомлении. */
+    @PluginMethod
+    public void downloadsActive(PluginCall call) {
+        String text = call.getString("text", "Идёт загрузка серий");
+        int progress = call.getInt("progress", -1);
+        try {
+            DownloadService.update(getContext(), text, progress);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("Не удалось запустить фоновую загрузку: " + e.getMessage());
+        }
+    }
+
+    /** Загрузок больше нет — убрать уведомление и отпустить приложение. */
+    @PluginMethod
+    public void downloadsIdle(PluginCall call) {
+        DownloadService.stop(getContext());
+        call.resolve();
+    }
+
+    /** Android 13+: попросить разрешение на уведомления (иначе прогресс загрузки не виден). */
+    @PluginMethod
+    public void askNotifications(PluginCall call) {
+        if (Build.VERSION.SDK_INT >= 33 && getActivity() != null
+                && androidx.core.content.ContextCompat.checkSelfPermission(getContext(), android.Manifest.permission.POST_NOTIFICATIONS)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            androidx.core.app.ActivityCompat.requestPermissions(getActivity(),
+                    new String[] { android.Manifest.permission.POST_NOTIFICATIONS }, 7302);
+        }
+        call.resolve();
+    }
+
     @PluginMethod
     public void isPip(PluginCall call) {
         JSObject ret = new JSObject();
