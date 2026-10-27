@@ -36,20 +36,45 @@ function headersFor(url) {
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 const uriOf = async (path) => (await Filesystem.getUri({ path, directory: DATA })).uri;
 
+// Идущие нативные загрузки по пути файла. Остановить нативную загрузку нельзя, поэтому
+// повторная попытка или «продолжить» после паузы подхватывают уже идущую, а не запускают вторую
+// в тот же файл (из-за двух параллельных загрузок полоска прыгала туда-сюда).
+const activeTransfers = new Map();
+
+function abortPromise(signal) {
+  if (!signal) return null;
+  return new Promise((_, reject) => {
+    const fail = () => reject(new DOMException("Отменено", "AbortError"));
+    if (signal.aborted) fail();
+    else signal.addEventListener("abort", fail, { once: true });
+  });
+}
+
 async function downloadTo(url, path, { progress = false, signal } = {}) {
   let lastErr;
   for (let attempt = 1; attempt <= RETRIES; attempt++) {
     if (signal && signal.aborted) throw new DOMException("Отменено", "AbortError");
     try {
       const target = await uriOf(path);
-      await Promise.race([
-        FileTransfer.downloadFile({ url, path: target, headers: headersFor(url), progress, connectTimeout: 20000, readTimeout: 60000 }),
-        delay(FILE_TIMEOUT_MS).then(() => { throw new Error("Сервер слишком долго не отвечает"); }),
-      ]);
+      let job = activeTransfers.get(path);
+      if (!job) {
+        job = FileTransfer.downloadFile({ url, path: target, headers: headersFor(url), progress, connectTimeout: 20000, readTimeout: 60000 })
+          .finally(() => activeTransfers.delete(path));
+        job.catch(() => {}); // если мы перестали ждать (пауза), ошибка не должна всплыть необработанной
+        activeTransfers.set(path, job);
+      }
+      const races = [job];
+      // Кусок видео — небольшой, общий лимит времени уместен. Целый MP4 может качаться долго:
+      // зависание там ловит сам нативный readTimeout.
+      if (!progress) races.push(delay(FILE_TIMEOUT_MS).then(() => { throw new Error("Сервер слишком долго не отвечает"); }));
+      const abort = abortPromise(signal);
+      if (abort) races.push(abort);
+      await Promise.race(races);
       const st = await exists(path);
       if (!st || !st.size) throw new Error("Пустой файл");
       return st.size;
     } catch (err) {
+      if (err && err.name === "AbortError") throw err;
       lastErr = err;
       console.warn(`[file] попытка ${attempt}/${RETRIES}:`, (err && (err.message || err.code)) || err, url.slice(0, 120));
       await delay(800 * attempt);
@@ -420,13 +445,12 @@ class Downloads {
     const handle = await FileTransfer.addListener("progress", (p) => {
       if (p.url !== url) return;
       it.bytes = p.bytes;
-      if (p.lengthComputable && p.contentLength) it.progress = p.bytes / p.contentLength;
+      if (p.lengthComputable && p.contentLength) it.progress = Math.max(it.progress || 0, p.bytes / p.contentLength);
       this.notify();
     });
     try {
-      // отменить уже идущую нативную загрузку файла нельзя — проверяем отмену после
+      // на паузе нативная загрузка продолжается в фоне; «продолжить» подхватит её (см. downloadTo)
       it.bytes = await downloadTo(url, path, { progress: true, signal });
-      if (signal.aborted) throw new DOMException("Отменено", "AbortError");
     } finally {
       handle.remove();
     }
