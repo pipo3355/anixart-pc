@@ -9,6 +9,7 @@ import { Network } from "@capacitor/network";
 import { DATA, readJson, writeJson, exists, removePath, serial } from "./storage.js";
 import { qualitiesFor } from "./links.js";
 import { getSkipTimes } from "../../skiptimes.js";
+import { Device } from "./device.js";
 
 const ROOT = "downloads";
 const INDEX = `${ROOT}/index.json`;
@@ -16,6 +17,7 @@ const POSTERS = "posters";
 const WORKERS = 3; // кусков HLS одновременно
 const RETRIES = 3;
 const FILE_TIMEOUT_MS = 120_000;
+const RESUME_RETRIES = 6; // попыток подряд без прогресса при докачке целого файла
 const UA = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Mobile Safari/537.36";
 
 // «…/720.mp4:hls:manifest.m3u8» → «…/720.mp4»
@@ -34,6 +36,9 @@ function headersFor(url) {
 }
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+// обрыв соединения (а не «сервер отказал» или «не видео»)
+const isNetworkError = (err) => !!err && (err.code === "NETWORK" || err instanceof TypeError
+  || /network|timeout|timed out|connection|unreachable|reset|failed to fetch|обрыв|оборвал|не отвечает/i.test(String(err.message || "")));
 const uriOf = async (path) => (await Filesystem.getUri({ path, directory: DATA })).uri;
 
 // Идущие нативные загрузки по пути файла. Остановить нативную загрузку нельзя, поэтому
@@ -298,13 +303,16 @@ class Downloads {
   async next() {
     if (this.active) return;
     const it = this.items.find((x) => x.status === "queued");
-    if (!it) return;
+    if (!it) { if (this.waiting) { this.waiting = false; this.notify(true); } return; }
     if (!(await this.canDownloadNow())) {
+      if (!this.waiting) { this.waiting = true; this.notify(true); }
       clearTimeout(this._waitTimer);
       this._waitTimer = setTimeout(() => this.next(), 15_000);
       return;
     }
     if (this.active) return;
+    let retryIn = 50;
+    this.waiting = false;
     const controller = new AbortController();
     this.active = { id: it.id, controller };
     it.status = "downloading";
@@ -317,8 +325,10 @@ class Downloads {
     } catch (err) {
       if (controller.signal.aborted) {
         if (it.status === "downloading") it.status = "canceled";
-      } else if (!(await this.canDownloadNow())) {
-        it.status = "queued"; // пропала сеть — продолжим, когда появится
+      } else if (!(await this.canDownloadNow()) || isNetworkError(err)) {
+        // пропала или сменилась сеть — продолжим с того же места чуть позже
+        it.status = "queued";
+        retryIn = 15_000;
       } else {
         console.error("[download]", it.releaseTitle, it.name, err);
         it.status = "error";
@@ -326,9 +336,11 @@ class Downloads {
       }
     } finally {
       this.active = null;
+      this.waiting = retryIn > 50;
       await this.persist();
       this.notify(true);
-      setTimeout(() => this.next(), 50);
+      clearTimeout(this._waitTimer);
+      this._waitTimer = setTimeout(() => this.next(), retryIn);
     }
   }
 
@@ -360,7 +372,10 @@ class Downloads {
             break;
           } catch (err) {
             if (signal.aborted) throw err;
+            // обрыв сети — не повод переходить на куски: недокачанный MP4 оставляем и продолжим его позже
+            if (!(err && err.notVideo)) throw err;
             console.warn("[download] прямой MP4 не подошёл, качаю кусками:", err && err.message);
+            it.fileTotal = 0;
             await Filesystem.deleteFile({ path: `${dir}/video.mp4`, directory: DATA }).catch(() => {});
           }
         }
@@ -437,11 +452,14 @@ class Downloads {
       const type = res.headers.get("content-type") || "";
       const len = Number(res.headers.get("content-length")) || 0;
       if (!res.ok || /text|html|json|mpegurl/i.test(type) || (len && len < 1_000_000)) {
-        throw new Error(`не видео (HTTP ${res.status}, ${type || "без типа"}, ${len} байт)`);
+        const err = new Error(`не видео (HTTP ${res.status}, ${type || "без типа"}, ${len} байт)`);
+        err.notVideo = true;
+        throw err;
       }
     }
     it.kind = "file";
     const path = `${dir}/video.mp4`;
+    if (Capacitor.isNativePlatform()) return this.runFileResumable(it, url, path, signal);
     const handle = await FileTransfer.addListener("progress", (p) => {
       if (p.url !== url) return;
       it.bytes = p.bytes;
@@ -452,6 +470,46 @@ class Downloads {
       // на паузе нативная загрузка продолжается в фоне; «продолжить» подхватит её (см. downloadTo)
       it.bytes = await downloadTo(url, path, { progress: true, signal });
     } finally {
+      handle.remove();
+    }
+    it.entry = "video.mp4";
+  }
+
+  // Целый файл с докачкой (нативный ResumableDownloader): обрыв сети, смена Wi-Fi на мобильный,
+  // пауза — продолжаем с того же места, а не с нуля.
+  async runFileResumable(it, url, path, signal) {
+    const target = await uriOf(path);
+    const handle = await Device.addListener("downloadProgress", (p) => {
+      if (p.id !== it.id) return;
+      it.bytes = p.bytes;
+      if (p.total > 0) { it.fileTotal = p.total; it.progress = p.bytes / p.total; }
+      this.notify();
+    });
+    const onAbort = () => Device.cancelDownload({ id: it.id }).catch(() => {});
+    signal.addEventListener("abort", onAbort, { once: true });
+    try {
+      let fails = 0;
+      for (;;) {
+        if (signal.aborted) throw new DOMException("Отменено", "AbortError");
+        const before = it.bytes || 0;
+        try {
+          const r = await Device.downloadFile({ id: it.id, url, path: target, headers: headersFor(url), expectTotal: it.fileTotal || 0 });
+          it.bytes = r.size;
+          it.fileTotal = r.total;
+          break;
+        } catch (err) {
+          if (signal.aborted || (err && err.code === "CANCELED")) throw new DOMException("Отменено", "AbortError");
+          if (err && err.code === "HTTP") { const e = new Error(err.message); e.notVideo = !(it.bytes > 0); throw e; }
+          // сеть: если что-то успело скачаться — попытка не считается неудачной
+          fails = (it.bytes || 0) > before ? 0 : fails + 1;
+          console.warn(`[file] обрыв (${fails}/${RESUME_RETRIES}), продолжу с ${Math.round((it.bytes || 0) / 1e6)} МБ:`, err && err.message);
+          if (fails >= RESUME_RETRIES) throw err;
+          this.persist();
+          await delay(2000 * fails);
+        }
+      }
+    } finally {
+      signal.removeEventListener("abort", onAbort);
       handle.remove();
     }
     it.entry = "video.mp4";

@@ -16,8 +16,9 @@ export function keepDownloadsAlive(downloads) {
 
   const describe = (list) => {
     const active = list.find((it) => it.status === "downloading");
-    if (!active) return null;
     const queued = list.filter((it) => it.status === "queued").length;
+    // связь пропала или сменилась — служба остаётся, чтобы продолжить сразу, как сеть вернётся
+    if (!active) return downloads.waiting && queued ? { text: `Жду интернет… · в очереди ${queued}`, progress: -1 } : null;
     const pct = Math.round((active.progress || 0) * 100);
     let text = `${active.releaseTitle} — ${active.name} · ${pct}%`;
     if (queued) text += ` · ещё ${queued} в очереди`;

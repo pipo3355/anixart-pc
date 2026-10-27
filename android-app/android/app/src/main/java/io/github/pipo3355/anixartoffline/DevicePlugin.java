@@ -26,6 +26,57 @@ import java.io.File;
 public class DevicePlugin extends Plugin {
 
     private boolean pipActive = false;
+    private final ResumableDownloader downloader = new ResumableDownloader();
+
+    /**
+     * Скачать файл с докачкой (см. ResumableDownloader). Прогресс — событие «downloadProgress»
+     * {id, bytes, total}. Ошибки: code CANCELED (отменили), HTTP (сервер отказал), NETWORK (сеть).
+     */
+    @PluginMethod
+    public void downloadFile(PluginCall call) {
+        final String id = call.getString("id");
+        String url = call.getString("url");
+        String path = call.getString("path");
+        if (id == null || url == null || path == null) { call.reject("Не хватает параметров"); return; }
+        if (path.startsWith("file://")) path = Uri.parse(path).getPath();
+        java.util.Map<String, String> headers = new java.util.HashMap<>();
+        JSObject h = call.getObject("headers", new JSObject());
+        java.util.Iterator<String> keys = h.keys();
+        while (keys.hasNext()) {
+            String k = keys.next();
+            headers.put(k, h.getString(k));
+        }
+        Double expect = call.getDouble("expectTotal", 0.0);
+        long expectTotal = expect == null ? 0 : expect.longValue();
+        downloader.start(id, url, path, headers, expectTotal,
+                (bytes, total) -> {
+                    JSObject p = new JSObject();
+                    p.put("id", id);
+                    p.put("bytes", bytes);
+                    p.put("total", total);
+                    notifyListeners("downloadProgress", p);
+                },
+                new ResumableDownloader.Done() {
+                    @Override public void ok(long size, long total) {
+                        JSObject r = new JSObject();
+                        r.put("size", size);
+                        r.put("total", total);
+                        call.resolve(r);
+                    }
+                    @Override public void fail(Exception e) {
+                        String code = e instanceof ResumableDownloader.Canceled ? "CANCELED"
+                                : e instanceof ResumableDownloader.HttpError ? "HTTP" : "NETWORK";
+                        call.reject(e.getMessage() != null ? e.getMessage() : e.toString(), code);
+                    }
+                });
+    }
+
+    @PluginMethod
+    public void cancelDownload(PluginCall call) {
+        String id = call.getString("id");
+        if (id != null) downloader.cancel(id);
+        call.resolve();
+    }
 
     /** Свободное и общее место в хранилище приложения, в байтах. */
     @PluginMethod
