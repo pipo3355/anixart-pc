@@ -1,4 +1,4 @@
-// Полноэкранный плеер для скачанных серий. Раскладка как в Anixart:
+// Полноэкранный плеер: скачанные серии и онлайн-просмотр (ctx.online). Раскладка как в Anixart:
 // сверху «назад», название и серия, скорость, качество, замок;
 // по центру предыдущая / пауза / следующая; снизу полоса, время, «пропустить», PiP, растянуть.
 
@@ -10,6 +10,8 @@ import { Device } from "./device.js";
 import { downloads } from "./downloads.js";
 import { setProgress, progressOf, setWatched } from "./api.js";
 import { settings } from "./settings.js";
+import { onlineQualities, pickOnlineQuality, candidatesFor, proxyLoader } from "./online.js";
+import { getSkipTimes } from "../../skiptimes.js";
 
 const WATCHED_AT = 0.85;
 const HIDE_AFTER_MS = 3000;
@@ -143,6 +145,7 @@ class Player {
     if (this.root) $(".p-sleep", this.root).textContent = "Сон";
     this.report(true);
     this.stopCountdown();
+    this.loadToken = (this.loadToken || 0) + 1; // недогруженная онлайн-серия не должна включиться после закрытия
     if (this.hls) { this.hls.destroy(); this.hls = null; }
     this.video.pause();
     this.video.removeAttribute("src");
@@ -166,7 +169,7 @@ class Player {
   // Список серий в плеере = все скачанные серии тайтла. Если, пока смотришь,
   // докачалась ещё одна — она сразу появляется в очереди (кнопка ⏭, автопереход).
   syncItems(list) {
-    if (!this.ctx) return;
+    if (!this.ctx || this.ctx.online) return; // онлайн: список серий = все серии озвучки
     const cur = this.current();
     const done = list
       .filter((d) => d.releaseId === cur.releaseId && d.status === "done")
@@ -202,6 +205,7 @@ class Player {
 
   // Следующая по номеру серия, которая ещё качается или стоит в очереди
   nextPending(list) {
+    if (this.ctx.online) return null;
     const cur = this.current();
     return list
       .filter((d) => d.releaseId === cur.releaseId && d.position > cur.position && (d.status === "queued" || d.status === "downloading"))
@@ -232,7 +236,11 @@ class Player {
     this.skipped = { op: false, ed: false };
     $(".p-marks", this.root).replaceChildren();
     $(".p-skipseg", this.root).hidden = true;
-    if (downloads.needsSkips(it)) {
+    if (it.online) {
+      const copy = this.localCopy(it);
+      if (copy && copy.skip) this.skip = copy.skip;
+      else if (it.skip === undefined) this.fetchOnlineSkips(it);
+    } else if (downloads.needsSkips(it)) {
       // тайминги ещё не искали (серия скачана старой версией) — ищем, пока есть интернет
       downloads.fetchSkips(it).then((skip) => {
         if (this.ctx && this.current().id === it.id && skip) { this.skip = skip; this.drawMarks(); }
@@ -240,35 +248,132 @@ class Player {
     }
     $(".p-t1", this.root).textContent = this.ctx.releaseTitle;
     $(".p-t2", this.root).textContent = it.name;
-    $(".p-q", this.root).textContent = /^\d+$/.test(it.quality || "") ? `${it.quality}p` : "Авто";
+    $(".p-q", this.root).textContent = it.online ? "…" : /^\d+$/.test(it.quality || "") ? `${it.quality}p` : "Авто";
     this.updateNavButtons();
 
-    const src = await downloads.playUrl(it);
     const saved = await progressOf(it.releaseId, it.position);
-    const resumeAt = saved && saved.d && saved.t > 10 && saved.t < saved.d - 30 ? saved.t : 0;
+    const resumeAt = this.resumeOverride != null ? this.resumeOverride
+      : saved && saved.d && saved.t > 10 && saved.t < saved.d - 30 ? saved.t : 0;
+    this.resumeOverride = null;
+    const token = (this.loadToken = (this.loadToken || 0) + 1);
 
     if (this.hls) { this.hls.destroy(); this.hls = null; }
-    const start = () => {
-      if (resumeAt) { this.video.currentTime = resumeAt; this.toast(`Продолжаем с ${fmt(resumeAt)}`); }
-      this.video.playbackRate = settings.get().speed || 1;
-      this.video.play().catch(() => {});
-    };
-    if (it.kind === "hls" && window.Hls && window.Hls.isSupported()) {
-      this.hls = new window.Hls({ enableWorker: false, maxBufferHole: 0.5, backBufferLength: 90 });
-      this.hls.on(window.Hls.Events.MANIFEST_PARSED, start);
-      this.hls.on(window.Hls.Events.ERROR, (_e, info) => {
-        if (!info.fatal) return;
-        if (info.type === window.Hls.ErrorTypes.MEDIA_ERROR) this.hls.recoverMediaError();
-        else this.toast(`Файл серии повреждён (${info.details}). Удалите и скачайте её заново.`, 6000);
-      });
-      this.hls.loadSource(src);
-      this.hls.attachMedia(this.video);
+    this.video.removeAttribute("src");
+    this.candidates = [];
+
+    // онлайн-серия, которая уже скачана, — играем с телефона
+    const local = it.online ? this.localCopy(it) : it;
+    if (local) {
+      this.online = false;
+      const src = await downloads.playUrl(local);
+      if (token !== this.loadToken) return;
+      $(".p-q", this.root).textContent = /^\d+$/.test(local.quality || "") ? `${local.quality}p` : "Авто";
+      this.attach({ src, hls: local.kind === "hls" }, resumeAt);
     } else {
-      this.video.src = src;
-      this.video.addEventListener("loadedmetadata", start, { once: true });
+      this.online = true;
+      const wait = $(".p-wait", this.root);
+      wait.textContent = "Загружаю видео…";
+      wait.hidden = false;
+      try {
+        if (!it.qualities) it.qualities = await onlineQualities(it.url);
+        if (token !== this.loadToken) return;
+        if (!it.qualities.length) throw new Error("Нет доступных ссылок на видео");
+        const q = pickOnlineQuality(it.qualities, it.quality || settings.get().onlineQuality || settings.get().quality);
+        it.quality = q.quality;
+        $(".p-q", this.root).textContent = /^\d+$/.test(q.quality) ? `${q.quality}p` : "Авто";
+        this.candidates = candidatesFor(q);
+        wait.hidden = true;
+        this.attach(this.candidates.shift(), resumeAt);
+      } catch (err) {
+        if (token !== this.loadToken) return;
+        wait.hidden = true;
+        this.toast(`Не удалось загрузить видео: ${(err && err.message) || err}`, 6000);
+      }
     }
     this.updateSpeedLabel();
     this.showUi();
+  }
+
+  // Скачанная копия онлайн-серии (та же озвучка и источник)
+  localCopy(it) {
+    const d = downloads.findFor(it.releaseId, it.position, it.sourceId);
+    return d && d.status === "done" && d.sourceId === it.sourceId ? d : null;
+  }
+
+  // Подключить источник к <video>. При ошибке онлайн-источника пробуем следующий вариант.
+  attach(cand, resumeAt) {
+    const token = this.loadToken;
+    const start = () => {
+      if (token !== this.loadToken) return;
+      this.attachStarted = true;
+      if (resumeAt) {
+        this.video.currentTime = resumeAt;
+        if (!this.quietResume) this.toast(`Продолжаем с ${fmt(resumeAt)}`);
+      }
+      this.quietResume = false;
+      this.video.playbackRate = settings.get().speed || 1;
+      this.video.play().catch(() => {});
+    };
+    this.attachStarted = false;
+    this.attachResume = resumeAt;
+    if (cand.hls && window.Hls && window.Hls.isSupported()) {
+      const cfg = { enableWorker: false, maxBufferHole: 0.5, backBufferLength: 90 };
+      const loader = this.online ? proxyLoader(window.Hls) : null;
+      if (loader) cfg.loader = loader; // undefined здесь сломал бы загрузчик по умолчанию
+      this.hls = new window.Hls(cfg);
+      this.hls.on(window.Hls.Events.MANIFEST_PARSED, start);
+      this.hls.on(window.Hls.Events.ERROR, (_e, info) => {
+        if (!info.fatal || token !== this.loadToken) return;
+        if (info.type === window.Hls.ErrorTypes.MEDIA_ERROR) { this.hls.recoverMediaError(); return; }
+        if (this.online) {
+          if (info.type === window.Hls.ErrorTypes.NETWORK_ERROR && this.attachStarted) { this.hls.startLoad(); return; }
+          this.tryNextSource(info.details);
+          return;
+        }
+        this.toast(`Файл серии повреждён (${info.details}). Удалите и скачайте её заново.`, 6000);
+      });
+      this.hls.loadSource(cand.src);
+      this.hls.attachMedia(this.video);
+    } else {
+      this.video.src = cand.src;
+      this.video.addEventListener("loadedmetadata", start, { once: true });
+    }
+  }
+
+  tryNextSource(reason) {
+    const next = this.candidates.shift();
+    if (!next) {
+      this.toast(`Видео не открылось${reason ? ` (${reason})` : ""}. Попробуйте другую озвучку или источник.`, 6000);
+      return;
+    }
+    console.warn("[player] источник не открылся, пробую следующий:", reason);
+    const at = this.video.currentTime || this.attachResume || 0;
+    if (this.hls) { this.hls.destroy(); this.hls = null; }
+    this.quietResume = true;
+    this.attach(next, at);
+  }
+
+  // Онлайн: сменить качество, продолжив с того же места
+  switchQuality(quality) {
+    const it = this.current();
+    if (it.quality === quality) return;
+    it.quality = quality;
+    settings.set({ onlineQuality: quality });
+    this.resumeOverride = this.video.currentTime || 0;
+    this.quietResume = true;
+    this.load();
+  }
+
+  // Тайминги опенинга/эндинга для онлайн-серии (у скачанных они хранятся с серией)
+  fetchOnlineSkips(it) {
+    const r = this.ctx.release || {};
+    getSkipTimes({ id: it.releaseId, titleOriginal: r.titleOriginal, titleRu: this.ctx.releaseTitle, year: r.year },
+      { position: it.position, url: it.url })
+      .then((found) => {
+        it.skip = found ? { op: found.op, ed: found.ed } : null;
+        if (this.ctx && this.current() === it && it.skip) { this.skip = it.skip; this.drawMarks(); }
+      })
+      .catch(() => {});
   }
 
   async go(delta) {
@@ -494,7 +599,7 @@ class Player {
   startCountdown() {
     if (this.ctx.index >= this.ctx.items.length - 1) {
       if (this.nextPending(downloads.list())) { this.go(1); this.showUi(); return; }
-      this.toast("Это была последняя скачанная серия", 3000);
+      this.toast(this.ctx.online ? "Это была последняя серия" : "Это была последняя скачанная серия", 3000);
       this.showUi();
       return;
     }
@@ -530,7 +635,11 @@ class Player {
       if (this.sleepAtEnd) { this.fireSleep(); return; } // «в конце серии» — следующую не включаем
       this.startCountdown();
     });
-    v.addEventListener("error", () => this.toast("Не удалось открыть файл серии. Удалите её и скачайте заново.", 6000));
+    v.addEventListener("error", () => {
+      if (!this.ctx || this.hls || !v.getAttribute("src")) return; // ошибки hls.js обрабатываются отдельно
+      if (this.online) { this.tryNextSource(v.error && v.error.message); return; }
+      this.toast("Не удалось открыть файл серии. Удалите её и скачайте заново.", 6000);
+    });
 
     this.seek.addEventListener("input", () => { this.seeking = true; this.updateTime(); clearTimeout(this.hideTimer); });
     this.seek.addEventListener("change", () => {
@@ -715,8 +824,14 @@ class Player {
           break;
         case "quality": {
           const it = this.current();
-          const q = /^\d+$/.test(it.quality || "") ? `${it.quality}p` : "Авто";
-          this.menu("Качество", [[it.quality, q, "скачано"]], it.quality, null);
+          const label = (x) => (/^\d+$/.test(x || "") ? `${x}p` : "Авто");
+          if (this.online && it.qualities && it.qualities.length) {
+            this.menu("Качество", it.qualities.map((q) => [q.quality, label(q.quality)]), it.quality, (val) => this.switchQuality(val));
+          } else {
+            const local = it.online ? this.localCopy(it) : it;
+            const qq = local ? local.quality : it.quality;
+            this.menu("Качество", [[qq, label(qq), "скачано"]], qq, null);
+          }
           break;
         }
         case "upnext-cancel": this.stopCountdown(); this.showUi(); break;

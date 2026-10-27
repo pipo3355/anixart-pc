@@ -456,16 +456,149 @@ function renderRelease(view, screen) {
           : null,
       ),
     ));
+    body.append(listControls(r));
     if (r.description) {
       const d = el("p", { class: "desc clamp", text: r.description, onclick: () => d.classList.toggle("clamp") });
       body.append(d);
     }
+    const related = relatedBlock(r);
+    if (related) body.append(related);
     if (r.is_play_disabled || r.is_view_blocked) {
       body.append(el("div", { class: "muted pad", text: "Этот тайтл недоступен для просмотра." }));
       return;
     }
     episodePicker(body, r);
   }).catch((err) => body.replaceChildren(errorBox(err)));
+}
+
+// Статус в списках (Смотрю, В планах…) и избранное
+function listControls(r) {
+  const box = el("div", { class: "list-ctl" });
+  if (!state.session.loggedIn) {
+    box.append(el("button", { class: "ghost small", text: "Войти, чтобы добавить в списки", onclick: () => { state.tab = "profile"; render(); } }));
+    return box;
+  }
+  let current = r.profile_list_status || 0;
+  let fav = Boolean(r.is_favorite);
+  let busy = false;
+  const row = el("div", { class: "chips status-chips" });
+  const favBtn = el("button", { class: "chip fav" });
+  const paint = () => {
+    row.querySelectorAll("[data-st]").forEach((b) => b.classList.toggle("on", Number(b.dataset.st) === current));
+    favBtn.textContent = fav ? "★ В избранном" : "☆ В избранное";
+    favBtn.classList.toggle("on", fav);
+  };
+  for (const [k, label] of Object.entries(STATUS)) {
+    row.append(el("button", { class: "chip", "data-st": k, text: label, onclick: async () => {
+      if (busy) return;
+      const next = Number(k) === current ? 0 : Number(k); // нажатие на выбранный — убрать из списков
+      const prev = current;
+      busy = true;
+      current = next;
+      paint();
+      try {
+        await A.setListStatus(r.id, next, prev);
+        r.profile_list_status = next;
+        toast(next ? `Добавлено в «${STATUS[next]}»` : "Убрано из списков");
+      } catch (err) {
+        current = prev;
+        paint();
+        toast(err.message, true);
+      } finally { busy = false; }
+    } }));
+  }
+  favBtn.onclick = async () => {
+    if (busy) return;
+    busy = true;
+    fav = !fav;
+    paint();
+    try {
+      await A.setFavorite(r.id, fav);
+      r.is_favorite = fav;
+    } catch (err) {
+      fav = !fav;
+      paint();
+      toast(err.message, true);
+    } finally { busy = false; }
+  };
+  row.append(favBtn);
+  paint();
+  box.append(row);
+  return box;
+}
+
+// Связанные релизы: другие сезоны, фильмы, OVA той же франшизы
+function relatedBlock(r) {
+  const inline = Array.isArray(r.related_releases) ? r.related_releases : [];
+  const groupId = r.related && r.related.id;
+  if (!inline.length && !groupId) return null;
+  const strip = el("div", { class: "related-strip" });
+  const box = el("div", { class: "related" },
+    el("div", { class: "section-title", text: r.related && r.related.name_ru ? `Связанные релизы · ${r.related.name_ru}` : "Связанные релизы" }),
+    strip);
+  const card = (x) => {
+    const here = x.id === r.id;
+    const sub = [x.year, x.category && x.category.name, x.grade ? `${Number(x.grade).toFixed(1)}★` : null].filter(Boolean).join(" · ");
+    return el("button", { class: "rel-card" + (here ? " here" : ""), onclick: () => { if (!here) push({ type: "release", releaseId: x.id }); } },
+      poster(x.id, x.image, "rel-poster"),
+      el("div", { class: "rel-title", text: x.title_ru || x.title_original }),
+      el("div", { class: "row-sub", text: here ? "Вы здесь" : sub }));
+  };
+  const seen = new Set();
+  const add = (list) => { for (const x of list) if (x && !seen.has(x.id)) { seen.add(x.id); strip.append(card(x)); } };
+  // в ответе на тайтл приходит только часть группы — остальное догружаем
+  add([r, ...inline].sort((a, b) => (Number(a.year) || 0) - (Number(b.year) || 0)));
+  if (groupId && (r.related_count || 0) > seen.size) {
+    (async () => {
+      try {
+        const all = [];
+        for (let p = 0; p < 5; p++) {
+          const res = await A.api.related(groupId, p);
+          all.push(...res.items);
+          if (p + 1 >= res.totalPages || !res.items.length) break;
+        }
+        if (!all.length) return;
+        all.push(r);
+        all.sort((a, b) => (Number(a.year) || 0) - (Number(b.year) || 0));
+        strip.replaceChildren();
+        seen.clear();
+        add(all);
+        centerHere(strip);
+      } catch {}
+    })();
+  }
+  if (seen.size <= 1 && !groupId) return null;
+  requestAnimationFrame(() => centerHere(strip));
+  return box;
+}
+
+// прокрутить ленту так, чтобы текущий тайтл был посередине (не трогая прокрутку страницы)
+function centerHere(strip) {
+  const h = strip.querySelector(".here");
+  if (h) strip.scrollLeft = h.offsetLeft - (strip.clientWidth - h.clientWidth) / 2;
+}
+
+// Онлайн-просмотр серии: в плеере весь список серий этой озвучки и источника
+async function playOnline(r, eps, sourceId, dubberName, position) {
+  if (!eps.length) return;
+  const items = eps.map((ep) => ({
+    id: `online:${r.id}:${sourceId}:${ep.position}`,
+    online: true,
+    releaseId: r.id,
+    sourceId,
+    position: ep.position,
+    name: ep.name || `${ep.position} серия`,
+    url: ep.url,
+    dubberName,
+  }));
+  const index = Math.max(0, items.findIndex((x) => x.position === position));
+  await player.open({
+    online: true,
+    releaseTitle: r.title_ru || r.title_original,
+    release: { titleOriginal: r.title_original || "", year: r.year || null },
+    items,
+    index,
+  }, () => render());
 }
 
 function episodePicker(box, r) {
@@ -478,12 +611,32 @@ function episodePicker(box, r) {
   const list = el("div", { class: "list" });
   const dlBtn = el("button", { class: "primary", text: "Скачать выбранные", disabled: true });
   const allBtn = el("button", { class: "ghost", text: "Выбрать все" });
+  const contBtn = el("button", { class: "primary", text: "▶ Смотреть", disabled: true });
+  const qLabelEl = el("label", {}, "Качество загрузки", qSel);
+  const dlRow = el("div", { class: "btn-row sticky" }, allBtn, dlBtn);
+  const watchRow = el("div", { class: "btn-row sticky" }, contBtn);
+  // «Смотреть» — серии открываются онлайн (скачанные — с телефона); «Скачать» — выбор серий для загрузки
+  const modeChips = el("div", { class: "chips mode-chips" });
+  const setMode = (m) => {
+    state.epMode = m;
+    modeChips.querySelectorAll("[data-m]").forEach((b) => b.classList.toggle("on", b.dataset.m === m));
+    const watch = m === "watch";
+    qLabelEl.hidden = watch;
+    dlRow.hidden = watch;
+    watchRow.hidden = !watch;
+    selected.clear();
+    drawEpisodes();
+  };
+  for (const [m, label] of [["watch", "▶ Смотреть онлайн"], ["download", "⤓ Скачать"]]) {
+    modeChips.append(el("button", { class: "chip", "data-m": m, text: label, onclick: () => setMode(m) }));
+  }
   box.append(
+    modeChips,
     el("div", { class: "picker" },
       el("label", {}, "Озвучка", dubSel),
       el("label", {}, "Источник", srcSel),
-      el("label", {}, "Качество", qSel)),
-    el("div", { class: "btn-row sticky" }, allBtn, dlBtn),
+      qLabelEl),
+    dlRow, watchRow,
     info, list);
 
   const saved = JSON.parse(localStorage.getItem(`pick:${r.id}`) || "{}");
@@ -531,8 +684,43 @@ function episodePicker(box, r) {
     } catch (err) { info.textContent = err.message; }
   }
 
+  const dubberName = () => {
+    const dub = dubbers.find((d) => d.id === saved.dubberId);
+    const src = sources.find((s) => s.id === saved.sourceId);
+    return [dub && dub.name, src && src.name].filter(Boolean).join(", ");
+  };
+  const watchAt = (position) => playOnline(r, eps, saved.sourceId, dubberName(), position);
+
+  // С какой серии продолжить: прогресс на этом телефоне, иначе последняя серия из аккаунта
+  async function updateContinue() {
+    contBtn.disabled = !eps.length;
+    if (!eps.length) { contBtn.textContent = "▶ Смотреть"; return; }
+    const prog = await A.getProgress();
+    let best = null;
+    for (const ep of eps) {
+      const p = prog[`${r.id}:${ep.position}`];
+      if (p && (!best || p.at > best.p.at)) best = { ep, p };
+    }
+    let target = eps[0];
+    let resume = false;
+    if (best) {
+      const finished = best.p.d && best.p.t / best.p.d >= 0.85;
+      target = finished ? eps.find((e) => e.position > best.ep.position) || best.ep : best.ep;
+      resume = !finished || target === best.ep;
+    } else if (lastEp && lastEp.position) {
+      const pos = lastEp.is_watched ? lastEp.position + 1 : lastEp.position;
+      target = eps.find((e) => e.position === pos) || eps.find((e) => e.position === lastEp.position) || eps[0];
+      resume = true;
+    }
+    const name = target.name || `${target.position} серия`;
+    contBtn.textContent = resume ? `▶ Продолжить: ${name}` : `▶ Смотреть: ${name}`;
+    contBtn.onclick = () => watchAt(target.position);
+  }
+
   function drawEpisodes() {
     list.replaceChildren();
+    const watchMode = state.epMode !== "download";
+    if (watchMode) updateContinue();
     for (const ep of eps) {
       const d = downloads.findFor(r.id, ep.position, saved.sourceId);
       const mine = d && d.sourceId === saved.sourceId ? d : null;
@@ -543,8 +731,9 @@ function episodePicker(box, r) {
       else if (mine && mine.status === "error") badge = "⚠";
       const locked = mine && mine.status !== "error" && mine.status !== "canceled";
       const row = el("button", {
-        class: "ep-pick" + (selected.has(ep.position) ? " on" : "") + (locked ? " locked" : "") + (ep.is_watched ? " watched" : ""),
+        class: "ep-pick" + (selected.has(ep.position) ? " on" : "") + (locked || watchMode ? " locked" : "") + (ep.is_watched ? " watched" : "") + (watchMode ? " watch" : ""),
         onclick: () => {
+          if (watchMode) { watchAt(ep.position); return; }
           if (locked) { if (mine.status === "done") playFrom(r.id, ep.position); return; }
           if (selected.has(ep.position)) selected.delete(ep.position); else selected.add(ep.position);
           row.classList.toggle("on");
@@ -570,8 +759,6 @@ function episodePicker(box, r) {
   };
 
   dlBtn.onclick = () => {
-    const dub = dubbers.find((d) => d.id === saved.dubberId);
-    const src = sources.find((s) => s.id === saved.sourceId);
     let n = 0;
     for (const ep of eps.filter((e) => selected.has(e.position))) {
       downloads.add({
@@ -580,7 +767,7 @@ function episodePicker(box, r) {
         releaseOriginal: r.title_original || "",
         releaseYear: r.year || null,
         poster: r.image,
-        dubberName: [dub && dub.name, src && src.name].filter(Boolean).join(", "),
+        dubberName: dubberName(),
         sourceId: saved.sourceId,
         position: ep.position,
         name: ep.name || `${ep.position} серия`,
@@ -594,6 +781,8 @@ function episodePicker(box, r) {
     drawEpisodes();
     toast(settings.get().onlyWifi ? `Добавлено серий: ${n}. Загрузка начнётся по Wi-Fi` : `Добавлено в загрузки: ${n}`);
   };
+
+  setMode(state.epMode === "download" ? "download" : "watch");
 
   const off = downloads.on(() => {
     if (!list.isConnected) { off(); return; }

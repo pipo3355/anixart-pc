@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld("api", {
   signOut: call("auth:signOut"),
   search: call("search:releases"),
   release: call("release:get"),
+  related: call("related:get"),
   list: call("list:get"),
   favorites: call("favorites:get"),
   history: call("history:get"),

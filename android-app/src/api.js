@@ -164,7 +164,39 @@ export const api = {
     (await client.endpoints.episode.sources(releaseId, dubberId, REQ)).sources || []),
   episodes: (releaseId, dubberId, sourceId) => cached(`eps:${releaseId}:${dubberId}:${sourceId}`, async () =>
     (await client.endpoints.episode.episodes(releaseId, dubberId, sourceId, 0, REQ)).episodes || []),
+  // все релизы связанной группы (сезоны, фильмы, OVA), постранично
+  related: (relatedId, pageNum = 0) => cached(`related:${relatedId}:${pageNum}`, async () =>
+    page(await client.endpoints.related.get(relatedId, pageNum, REQ))),
 };
+
+// Статус в списках: 0 — убрать, 1..5 — Смотрю / В планах / Просмотрено / Отложено / Брошено
+export async function setListStatus(releaseId, newStatus, oldStatus) {
+  requireLogin();
+  try {
+    if (newStatus > 0) await client.endpoints.profileList.add(releaseId, newStatus, REQ);
+    else if (oldStatus > 0) await client.endpoints.profileList.delete(releaseId, oldStatus, REQ);
+  } catch (err) { throw new Error(describeError(err)); }
+  await patchCachedRelease(releaseId, { profile_list_status: newStatus });
+  return newStatus;
+}
+
+export async function setFavorite(releaseId, value) {
+  requireLogin();
+  try {
+    if (value) await client.endpoints.favorite.add(releaseId, REQ);
+    else await client.endpoints.favorite.delete(releaseId, REQ);
+  } catch (err) { throw new Error(describeError(err)); }
+  await patchCachedRelease(releaseId, { is_favorite: value });
+  return value;
+}
+
+// чтобы без сети страница тайтла показывала уже новый статус
+async function patchCachedRelease(id, patch) {
+  try {
+    const r = await readJson(cachePath(`release:${id}`), undefined);
+    if (r) await writeJson(cachePath(`release:${id}`), { ...r, ...patch });
+  } catch {}
+}
 
 // ---------- Отметки «просмотрено» ----------
 // Без сети отметка ложится в очередь и уходит в аккаунт, когда интернет появится.

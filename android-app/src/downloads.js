@@ -21,13 +21,13 @@ const RESUME_RETRIES = 6; // попыток подряд без прогресс
 const UA = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Mobile Safari/537.36";
 
 // «…/720.mp4:hls:manifest.m3u8» → «…/720.mp4»
-function directMp4(src) {
+export function directMp4(src) {
   const m = /^(.*\.mp4):hls:manifest\.m3u8(\?.*)?$/i.exec(String(src || ""));
   if (!m) return null;
   return (m[1].startsWith("//") ? `https:${m[1]}` : m[1]) + (m[2] || "");
 }
 
-const isHls = (s) => /m3u8/i.test(s.src) || /mpegurl/i.test(s.type || "");
+export const isHls = (s) => /m3u8/i.test(s.src) || /mpegurl/i.test(s.type || "");
 
 function headersFor(url) {
   const h = { "User-Agent": UA };

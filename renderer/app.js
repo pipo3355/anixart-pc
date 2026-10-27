@@ -807,13 +807,62 @@ function renderRelease(r) {
   );
 
   const watch = el("div", { class: "watch" }, el("h2", { text: "Смотреть" }));
-  $("release").replaceChildren(head, watch);
+  const related = relatedBlock(r);
+  $("release").replaceChildren(...[head, related, watch].filter(Boolean));
 
   if (r.is_play_disabled || r.is_view_blocked) {
     watch.append(el("div", { class: "muted", text: "Просмотр этого тайтла недоступен." }));
     return;
   }
   setupEpisodes(r, watch);
+}
+
+// Связанные релизы: другие сезоны, фильмы, OVA той же франшизы — лента карточек
+function relatedBlock(r) {
+  const inline = Array.isArray(r.related_releases) ? r.related_releases : [];
+  const groupId = r.related && r.related.id;
+  if (!inline.length && !groupId) return null;
+  const strip = el("div", { class: "related-strip" });
+  const box = el("div", { class: "related" },
+    el("h2", { text: r.related && r.related.name_ru ? `Связанные релизы · ${r.related.name_ru}` : "Связанные релизы" }),
+    strip);
+  const byYear = (a, b) => (Number(a.year) || 0) - (Number(b.year) || 0);
+  const draw = (list) => {
+    const seen = new Set();
+    strip.replaceChildren();
+    for (const x of list) {
+      if (!x || seen.has(x.id)) continue;
+      seen.add(x.id);
+      const here = x.id === r.id;
+      const sub = [x.year, x.category && x.category.name, x.grade ? `${Number(x.grade).toFixed(1)}★` : null].filter(Boolean).join(" · ");
+      strip.append(el("button", { class: "rel-card" + (here ? " here" : ""), title: x.title_ru || x.title_original,
+        onclick: () => { if (!here) openRelease(x.id); } },
+        el("img", { class: "rel-poster", src: x.image || "", alt: "", loading: "lazy" }),
+        el("div", { class: "rel-title", text: x.title_ru || x.title_original }),
+        el("div", { class: "rel-sub", text: here ? "Вы здесь" : sub })));
+    }
+    const h = strip.querySelector(".here");
+    if (h) requestAnimationFrame(() => { strip.scrollLeft = h.offsetLeft - (strip.clientWidth - h.clientWidth) / 2; });
+    return seen.size;
+  };
+  const shown = draw([r, ...inline].sort(byYear));
+  // в ответе на тайтл приходит только часть группы — остальное догружаем
+  if (groupId && (r.related_count || 0) > shown) {
+    (async () => {
+      try {
+        const all = [];
+        for (let p = 0; p < 5; p++) {
+          const res = await call(window.api.related, groupId, p);
+          all.push(...res.items);
+          if (p + 1 >= res.totalPages || !res.items.length) break;
+        }
+        if (all.length && strip.isConnected) draw([r, ...all].sort(byYear));
+      } catch {}
+    })();
+  } else if (shown <= 1) {
+    return null;
+  }
+  return box;
 }
 
 // С какой серии продолжить: локальный прогресс, иначе — последняя серия с сервера (например, с телефона)

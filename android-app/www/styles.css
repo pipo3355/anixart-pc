@@ -421,3 +421,24 @@ body.playing .toast { display: none; }
 }
 .player.pip .p-skipseg { display: none !important; }
 .p-sleep { font-variant-numeric: tabular-nums; }
+
+/* тайтл: статус в списках, связанные релизы, режим «смотреть/скачать» */
+.list-ctl { margin: -4px 0 6px; }
+.status-chips { margin: 0; }
+.chip.fav.on { background: #c98a14; }
+button.small { padding: 8px 12px; font-size: 14px; }
+.section-title { font-weight: 700; font-size: 17px; margin: 14px 0 8px; }
+.related { margin-bottom: 6px; }
+.related-strip { position: relative; display: flex; gap: 10px; overflow-x: auto; scrollbar-width: none; padding-bottom: 4px; }
+.related-strip::-webkit-scrollbar { display: none; }
+.rel-card {
+  flex: none; width: 112px; display: grid; gap: 4px; align-content: start; text-align: left;
+  background: none; padding: 0; color: var(--text);
+}
+.rel-poster { width: 112px; aspect-ratio: 2 / 3; object-fit: cover; border-radius: 10px; background: var(--panel-2); }
+.rel-card.here .rel-poster { outline: 3px solid var(--accent); outline-offset: -3px; }
+.rel-card.here .row-sub { color: var(--accent-2); }
+.rel-title { font-size: 13px; font-weight: 600; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.mode-chips { margin-top: 14px; }
+.ep-pick.watch .check { display: none; }
+.ep-pick.watch::before { content: "▶"; color: var(--accent-2); font-size: 13px; width: 16px; flex: none; }

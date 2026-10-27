@@ -381,6 +381,8 @@ handleCached("search:releases", async (query, pageNum = 0) => {
 });
 
 handleCached("release:get", async (id) => (await client.endpoints.release.get(id, true, REQ)).release);
+// Связанные релизы (сезоны, фильмы, OVA) — страница группы
+handleCached("related:get", async (relatedId, pageNum = 0) => page(await client.endpoints.related.get(relatedId, pageNum, REQ)));
 
 handleCached("list:get", async (status, pageNum = 0) => {
   requireLogin();
