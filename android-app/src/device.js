@@ -14,6 +14,7 @@ export const Device = registerPlugin("Device", {
     async downloadsActive() {},
     async downloadsIdle() {},
     async askNotifications() {},
+    async setOrientation() {},
     async sleep({ ms }) { await new Promise((r) => setTimeout(r, ms)); },
     async addListener() { return { remove() {} }; },
   }),

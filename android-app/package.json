@@ -1,6 +1,6 @@
 {
   "name": "anixart-offline",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "private": true,
   "description": "Неофициальное Android-приложение для загрузки серий Anixart и просмотра без интернета",
   "license": "GPL-2.0",

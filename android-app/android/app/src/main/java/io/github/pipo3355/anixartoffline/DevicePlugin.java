@@ -214,6 +214,22 @@ public class DevicePlugin extends Plugin {
         call.resolve();
     }
 
+    /**
+     * Ориентация экрана для плеера. «landscape» — горизонтально, но по датчику в обе стороны
+     * (стандартный плагин закрепляет только одну сторону); «any» — как обычно.
+     */
+    @PluginMethod
+    public void setOrientation(PluginCall call) {
+        String mode = call.getString("mode", "any");
+        int value = "landscape".equals(mode)
+                ? android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                : android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
+        getActivity().runOnUiThread(() -> {
+            getActivity().setRequestedOrientation(value);
+            call.resolve();
+        });
+    }
+
     @PluginMethod
     public void isPip(PluginCall call) {
         JSObject ret = new JSObject();
