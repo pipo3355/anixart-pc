@@ -230,6 +230,16 @@ public class DevicePlugin extends Plugin {
         });
     }
 
+    /** Полноэкранный режим плеера: скрыть строку состояния и навигацию (on=true) или вернуть. */
+    @PluginMethod
+    public void setImmersive(PluginCall call) {
+        boolean on = Boolean.TRUE.equals(call.getBoolean("on", false));
+        getActivity().runOnUiThread(() -> {
+            if (getActivity() instanceof MainActivity) ((MainActivity) getActivity()).setImmersive(on);
+            call.resolve();
+        });
+    }
+
     @PluginMethod
     public void isPip(PluginCall call) {
         JSObject ret = new JSObject();

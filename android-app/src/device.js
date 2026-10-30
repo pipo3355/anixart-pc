@@ -15,6 +15,7 @@ export const Device = registerPlugin("Device", {
     async downloadsIdle() {},
     async askNotifications() {},
     async setOrientation() {},
+    async setImmersive() {},
     async sleep({ ms }) { await new Promise((r) => setTimeout(r, ms)); },
     async addListener() { return { remove() {} }; },
   }),

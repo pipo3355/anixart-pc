@@ -134,7 +134,8 @@ class Player {
     });
     // горизонтально в обе стороны (по датчику); стандартный lock("landscape") держит только одну сторону
     try { await Device.setOrientation({ mode: "landscape" }); } catch { try { await ScreenOrientation.lock({ orientation: "landscape" }); } catch {} }
-    try { await StatusBar.hide(); } catch {}
+    // полный экран: строка состояния и навигация не возвращаются от касаний, только свайпом от края
+    try { await Device.setImmersive({ on: true }); } catch { try { await StatusBar.hide(); } catch {} }
     try { await KeepAwake.keepAwake(); } catch {}
     await this.load();
   }
@@ -160,7 +161,7 @@ class Player {
     if (this.backHandle) { this.backHandle.remove(); this.backHandle = null; }
     if (this.pipHandle) { this.pipHandle.remove(); this.pipHandle = null; }
     try { await Device.setOrientation({ mode: "any" }); } catch { try { await ScreenOrientation.unlock(); } catch {} }
-    try { await StatusBar.show(); } catch {}
+    try { await Device.setImmersive({ on: false }); } catch { try { await StatusBar.show(); } catch {} }
     try { await KeepAwake.allowSleep(); } catch {}
     if (this.onClose) this.onClose();
   }
