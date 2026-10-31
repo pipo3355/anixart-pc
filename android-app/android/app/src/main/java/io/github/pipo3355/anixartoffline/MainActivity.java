@@ -3,8 +3,10 @@ package io.github.pipo3355.anixartoffline;
 import android.content.res.Configuration;
 import android.os.Build;
 import android.os.Bundle;
+import android.graphics.Color;
+import android.graphics.drawable.Drawable;
+import android.view.View;
 import android.view.Window;
-import android.view.WindowManager;
 
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -22,6 +24,7 @@ public class MainActivity extends BridgeActivity {
 
     /** Плеер открыт: строка состояния и навигация скрыты (выезжают только свайпом от края). */
     private boolean immersive = false;
+    private Drawable savedBackground = null;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -43,13 +46,16 @@ public class MainActivity extends BridgeActivity {
         immersive = on;
         Window w = getWindow();
         WindowInsetsControllerCompat c = WindowCompat.getInsetsController(w, w.getDecorView());
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            WindowManager.LayoutParams lp = w.getAttributes();
-            // видео заходит под «чёлку» камеры, как в других плеерах
-            lp.layoutInDisplayCutoutMode = on
-                    ? WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-                    : WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT;
-            w.setAttributes(lp);
+        // Под вырез камеры окно не заводим: Capacitor отодвигает страницу от выреза отступом,
+        // и там оставалась серая полоса фона окна. Без захода система сама закрашивает вырез чёрным.
+        // Фон окна на время плеера тоже чёрный — чтобы никакие отступы не были видны.
+        View decor = w.getDecorView();
+        if (on) {
+            if (savedBackground == null) savedBackground = decor.getBackground();
+            decor.setBackgroundColor(Color.BLACK);
+        } else if (savedBackground != null) {
+            decor.setBackground(savedBackground);
+            savedBackground = null;
         }
         if (on) {
             // без этого режима любое касание экрана возвращает строку состояния насовсем
