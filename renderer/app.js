@@ -801,7 +801,7 @@ async function openRelease(id) {
   }
 }
 
-const isExternalId = (id) => typeof id === "string" && /^(al|kd)-/.test(id);
+const isExternalId = (id) => typeof id === "string" && /^(al|kd|ym)-/.test(id); // как в external.js
 
 // Откуда брать озвучки, источники и серии: Anixart или внешний тайтл (AniLibria, Kodik).
 // У внешнего тайтла озвучки уже пришли вместе с ним, а «источник» у каждой один.
