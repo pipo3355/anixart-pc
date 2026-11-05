@@ -11,6 +11,8 @@ const DEFAULTS = {
   onlyWifi: false,
   sort: "recent", // recent | title | size | unwatched
   filter: "all", // all | unwatched | watched | active
+  searchSource: "anixart", // где искать: anixart | anilibria | kodik
+  kodikToken: "", // свой ключ API Kodik (для поиска по Kodik)
 };
 
 let current = { ...DEFAULTS };

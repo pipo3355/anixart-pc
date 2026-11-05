@@ -169,13 +169,34 @@ function switchView(v) {
   highlightNav();
   $("list-title").textContent = viewTitle(state.view);
   $("search-form").hidden = state.view.type !== "search";
+  $("search-src").hidden = state.view.type !== "search";
+  if (state.view.type === "search") renderSearchSources();
   $("dl-tools").hidden = state.view.type !== "downloads";
   loadPage(true);
 }
 
+// Где искать: Anixart или внешние источники (AniLibria — без ключа, Kodik — со своим ключом API)
+const SEARCH_SOURCES = [["anixart", "Anixart"], ["anilibria", "AniLibria"], ["kodik", "Kodik"]];
+const searchSource = () => (state.settings && state.settings.searchSource) || "anixart";
+
+function renderSearchSources() {
+  $("search-src").replaceChildren(segmented(SEARCH_SOURCES, searchSource(), async (v) => {
+    await saveSettings({ searchSource: v });
+    renderSearchSources();
+    if (state.query) loadPage(true);
+  }));
+}
+
 async function fetchPage(pageNum) {
   const v = state.view;
-  if (v.type === "search") return call(window.api.search, state.query, pageNum);
+  if (v.type === "search") {
+    const src = searchSource();
+    if (src === "anixart") return call(window.api.search, state.query, pageNum);
+    if (src === "kodik" && !(state.settings && state.settings.kodikToken)) {
+      throw new Error("Для поиска по Kodik нужен свой ключ API — Kodik выдаёт его по заявке. Вставьте ключ в «Настройки» → «Поиск в Kodik».");
+    }
+    return call(window.api.externalSearch, src, state.query);
+  }
   if (v.type === "favorites") return call(window.api.favorites, pageNum);
   if (v.type === "history") return call(window.api.history, pageNum);
   if (v.type === "updates") return call(window.api.updates, pageNum);
@@ -371,6 +392,21 @@ function aboutSection() {
   );
 }
 
+// Ключ API Kodik для поиска по Kodik (Kodik выдаёт его по заявке). Хранится только на этом компьютере.
+function kodikSetting(st) {
+  const input = el("input", { type: "password", placeholder: "Ключ API Kodik", value: st.kodikToken || "", autocomplete: "off", class: "token-input" });
+  return el("section", { class: "setting" },
+    el("h2", { text: "Поиск в Kodik" }),
+    el("p", { text: "Поиск по AniLibria работает без ключа. Для Kodik нужен свой ключ API — Kodik выдаёт его по заявке. Ключ хранится только на этом компьютере." }),
+    el("div", { class: "token-row" },
+      input,
+      el("button", { type: "button", text: "Сохранить", onclick: async () => {
+        await saveSettings({ kodikToken: input.value.trim() });
+        toast(input.value.trim() ? "Ключ Kodik сохранён" : "Ключ Kodik удалён");
+      } })),
+  );
+}
+
 function renderSettings() {
   const grid = $("grid");
   grid.className = "grid settings-view";
@@ -397,6 +433,7 @@ function renderSettings() {
         custom,
       ),
     ),
+    kodikSetting(st),
     el("section", { class: "setting" },
       el("h2", { text: "Перемотка стрелками" }),
       el("p", { text: "На сколько секунд плеер перематывает по клавишам ← и →." }),
@@ -733,7 +770,7 @@ async function openRelease(id) {
   $("main").scrollTop = 0;
   try {
     const [r, prog] = await Promise.all([
-      call(window.api.release, id),
+      isExternalId(id) ? call(window.api.externalGet, id) : call(window.api.release, id),
       call(window.api.progress, id).catch(() => ({})),
     ]);
     if (!state.release || state.release.id !== id) return;
@@ -744,7 +781,30 @@ async function openRelease(id) {
   }
 }
 
+const isExternalId = (id) => typeof id === "string" && /^(al|kd)-/.test(id);
+
+// Откуда брать озвучки, источники и серии: Anixart или внешний тайтл (AniLibria, Kodik).
+// У внешнего тайтла озвучки уже пришли вместе с ним, а «источник» у каждой один.
+const anixartProvider = {
+  dubbers: (r) => call(window.api.dubbers, r.id),
+  sources: (r, dubberId) => call(window.api.sources, r.id, dubberId),
+  episodes: (r, dubberId, sourceId) => call(window.api.episodes, r.id, dubberId, sourceId),
+};
+
+function externalProvider(r) {
+  const tr = (id) => (r.translations || []).find((t) => t.id === id);
+  return {
+    dubbers: async () => r.translations || [],
+    sources: async (_r, dubberId) => {
+      const t = tr(dubberId);
+      return t ? [{ id: t.id, name: r.providerName, episodes_count: t.episodes_count }] : [];
+    },
+    episodes: async (_r, dubberId) => (tr(dubberId) || { episodes: [] }).episodes,
+  };
+}
+
 function renderRelease(r) {
+  const external = isExternalId(r.id);
   const meta = [
     ["Год", r.year],
     ["Статус", r.status && r.status.name],
@@ -801,20 +861,22 @@ function renderRelease(r) {
       el("h1", { text: r.title_ru || r.title_original }),
       el("div", { class: "orig", text: [r.title_original, r.title_alt].filter(Boolean).join(" · ") }),
       el("dl", { class: "meta" }, meta.map(([k, v]) => [el("dt", { text: k }), el("dd", { text: String(v) })])),
-      el("div", { class: "controls" }, statusSelect, favBtn),
+      external
+        ? el("div", { class: "ext-note", text: `Источник: ${r.providerName} · тайтл не из Anixart, в аккаунт не отмечается` })
+        : el("div", { class: "controls" }, statusSelect, favBtn),
       el("div", { class: "desc", text: r.description || "" }),
     ),
   );
 
   const watch = el("div", { class: "watch" }, el("h2", { text: "Смотреть" }));
-  const related = relatedBlock(r);
+  const related = external ? null : relatedBlock(r);
   $("release").replaceChildren(...[head, related, watch].filter(Boolean));
 
   if (r.is_play_disabled || r.is_view_blocked) {
     watch.append(el("div", { class: "muted", text: "Просмотр этого тайтла недоступен." }));
     return;
   }
-  setupEpisodes(r, watch);
+  setupEpisodes(r, watch, external ? externalProvider(r) : anixartProvider);
 }
 
 // Связанные релизы: другие сезоны, фильмы, OVA той же франшизы — лента карточек
@@ -887,7 +949,7 @@ function continuePoint(r, eps) {
   return { position: pos, at };
 }
 
-async function setupEpisodes(r, box) {
+async function setupEpisodes(r, box, P = anixartProvider) {
   const dubSelect = el("select");
   const srcSelect = el("select");
   const actions = el("div", { class: "watch-actions" });
@@ -901,7 +963,7 @@ async function setupEpisodes(r, box) {
 
   let dubbers;
   try {
-    dubbers = await call(window.api.dubbers, r.id);
+    dubbers = await P.dubbers(r);
   } catch (err) {
     info.textContent = err.message;
     info.className = "error";
@@ -925,7 +987,7 @@ async function setupEpisodes(r, box) {
     actions.replaceChildren();
     info.textContent = "Загрузка источников…";
     try {
-      sources = await call(window.api.sources, r.id, Number(dubSelect.value));
+      sources = await P.sources(r, Number(dubSelect.value));
       for (const s of sources) srcSelect.append(el("option", { value: s.id, text: `${s.name} · ${s.episodes_count} эп.` }));
       if (saved.sourceId && sources.some((s) => s.id === saved.sourceId)) srcSelect.value = String(saved.sourceId);
       if (!sources.length) { info.textContent = "Для этой озвучки нет источников."; return; }
@@ -951,12 +1013,12 @@ async function setupEpisodes(r, box) {
     const ctx = {
       release: r,
       sourceId,
-      dubberName: [dubber && dubber.name, source && source.name].filter(Boolean).join(", "),
+      dubberName: [...new Set([dubber && dubber.name, source && source.name].filter(Boolean))].join(", "),
       eps: [],
     };
 
     try {
-      ctx.eps = await call(window.api.episodes, r.id, dubberId, sourceId);
+      ctx.eps = await P.episodes(r, dubberId, sourceId);
       if (!state.release || state.release.id !== r.id) return;
       info.textContent = ctx.eps.length ? "" : "Серий нет.";
       for (const ep of ctx.eps) list.append(episodeItem(ctx, ep));
@@ -1001,7 +1063,7 @@ async function openPlayer(ctx, ep) {
       releaseYear: ctx.release.year || null,
       sourceId: ctx.sourceId,
       position: ep.position,
-      episodes: ctx.eps.map((e) => ({ position: e.position, name: e.name, url: e.url })),
+      episodes: ctx.eps.map((e) => ({ position: e.position, name: e.name, url: e.url, skip: e.skip })),
     });
     if (res && res.mode === "embed") toast("Прямую ссылку получить не удалось — открыт плеер источника");
   } catch (err) {
@@ -1032,6 +1094,7 @@ async function downloadEpisodes(ctx, eps) {
       position: ep.position,
       name: ep.name || `${ep.position} серия`,
       url: ep.url,
+      skip: ep.skip, // у AniLibria тайминги опенинга приходят вместе с серией
       quality: dlQuality(),
     }));
   if (!items.length) {
@@ -1124,7 +1187,7 @@ function episodeItem(ctx, ep) {
     }
   });
 
-  item.append(play, dl, mark, bar);
+  item.append(play, dl, ...(isExternalId(r.id) ? [] : [mark]), bar);
   return item;
 }
 

@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld("api", {
   search: call("search:releases"),
   release: call("release:get"),
   related: call("related:get"),
+  externalSearch: call("external:search"),
+  externalGet: call("external:get"),
   list: call("list:get"),
   favorites: call("favorites:get"),
   history: call("history:get"),

@@ -14,6 +14,7 @@ const {
 } = require("anixartjs");
 const { DownloadManager, createMediaHandler } = require("./downloads");
 const { getSkipTimes } = require("./skiptimes");
+const external = require("./external");
 
 // electron-updater есть только в собранном приложении с установленными зависимостями;
 // при запуске из исходников без него приложение тоже работает
@@ -106,6 +107,8 @@ const DEFAULT_SETTINGS = {
   seekStep: 10, // стрелки ← → в плеере, секунд
   skipOpening: 85, // Shift+→ и кнопка «Пропустить опенинг», если точных таймингов нет, секунд
   skipMode: "button", // OP/ED: "auto" — пропускать сразу, "button" — показывать кнопку, "off"
+  searchSource: "anixart", // где искать: anixart | anilibria | kodik
+  kodikToken: "", // свой ключ API Kodik (для поиска по Kodik), хранится только на этом компьютере
 };
 let settings = { ...DEFAULT_SETTINGS };
 const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
@@ -123,6 +126,8 @@ function sanitizeSettings(input) {
   if ("seekStep" in input) out.seekStep = clampInt(input.seekStep, 1, 120, out.seekStep);
   if ("skipOpening" in input) out.skipOpening = clampInt(input.skipOpening, 1, 600, out.skipOpening);
   if (["auto", "button", "off"].includes(input.skipMode)) out.skipMode = input.skipMode;
+  if (["anixart", "anilibria", "kodik"].includes(input.searchSource)) out.searchSource = input.searchSource;
+  if (typeof input.kodikToken === "string") out.kodikToken = input.kodikToken.trim().slice(0, 200);
   return out;
 }
 
@@ -225,6 +230,7 @@ async function pruneCache() {
 
 // Ошибка сети (нет интернета, сервер недоступен) — в отличие от ответа «нельзя» от Anixart
 function isNetworkError(err) {
+  if (err && err.final) return false; // внешние источники: нет ключа, ключ не подошёл и т.п.
   if (err instanceof AnixartError || err instanceof LoginRequiredError) return false;
   if (err instanceof HttpError) return err.status >= 500;
   return true;
@@ -412,6 +418,11 @@ handleCached("updates:get", async (pageNum = 0) => {
 });
 
 // newStatus: 0 — убрать из списков, 1..5 — BookmarkType
+// Поиск и тайтлы не из Anixart: AniLibria (без ключа) и Kodik (свой ключ API из настроек)
+handleCached("external:search", async (provider, query) =>
+  ({ items: await external.searchExternal(provider, query, { kodikToken: settings.kodikToken }), page: 0, totalPages: 1 }));
+handleCached("external:get", async (id) => external.getExternal(id, { kodikToken: settings.kodikToken }));
+
 handle("list:set", async (releaseId, newStatus, oldStatus) => {
   requireLogin();
   if (newStatus > 0) await client.endpoints.profileList.add(releaseId, newStatus, REQ);
@@ -476,6 +487,8 @@ function enqueueMark(mark) {
 
 // Ставит отметку; без сети — кладёт в очередь. Возвращает { queued }.
 async function setWatched(releaseId, sourceId, position, watched) {
+  // тайтлы из AniLibria и Kodik не из Anixart — в аккаунт их не отмечаем
+  if (external.isExternalId(releaseId)) return { skipped: true };
   const mark = { releaseId, sourceId, position, watched };
   // если по этой серии уже ждёт отметка, новая встаёт после неё, а не обгоняет
   const waiting = pendingMarks.some((m) => m.releaseId === releaseId && m.position === position);
@@ -634,6 +647,8 @@ function normalizeUrl(raw) {
 
 // Достаёт прямые ссылки на видео: { "720": [{src,type}], ... } или null
 async function resolveDirectLinks(url) {
+  // серия AniLibria из внешнего поиска: ссылка на её запись в API AniLibria
+  if (external.isAniLibriaEpisodeUrl(url)) return external.anilibriaEpisodeLinks(url);
   const host = new URL(url).hostname;
 
   if (host.includes("kodik")) {
@@ -765,6 +780,10 @@ function sendSkipTimes(win, ctx, data) {
   const local = downloads.findDone(ctx.releaseId, ep.position, ctx.sourceId);
   if (local && local.skip) {
     win.webContents.send("player:skip", { position: data.position, skip: local.skip });
+    return;
+  }
+  if (ep.skip) { // AniLibria отдаёт тайминги вместе с серией
+    win.webContents.send("player:skip", { position: data.position, skip: ep.skip });
     return;
   }
   const release = { id: ctx.releaseId, titleOriginal: ctx.releaseOriginal, titleRu: ctx.releaseTitle, year: ctx.releaseYear };
@@ -1069,6 +1088,8 @@ function createWindow() {
 if (process.platform === "win32") app.setAppUserModelId("local.anixart.pc");
 
 app.whenReady().then(async () => {
+  // внешние источники ходят в сеть через стек Chromium (как окно приложения)
+  external.configure({ fetch: (url, init) => net.fetch(url, init) });
   await loadSession();
   loadProgress();
   loadSettings();

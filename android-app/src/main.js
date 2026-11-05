@@ -12,6 +12,7 @@ import { player } from "./player.js";
 import { Device } from "./device.js";
 import { createUpdater } from "./updater.js";
 import { keepDownloadsAlive } from "./background.js";
+import { isExternalId } from "../../external.js";
 
 installNativeFetch();
 
@@ -402,6 +403,23 @@ function pagedList(container, fetchPage) {
   load();
 }
 
+// Где искать: Anixart или внешние источники (AniLibria — без ключа, Kodik — со своим ключом API)
+const SEARCH_SOURCES = [["anixart", "Anixart"], ["anilibria", "AniLibria"], ["kodik", "Kodik"]];
+
+function runSearch(results) {
+  results.replaceChildren();
+  if (!state.query) return;
+  const src = settings.get().searchSource || "anixart";
+  if (src === "anixart") { pagedList(results, (p) => A.api.search(state.query, p)); return; }
+  if (src === "kodik" && !settings.get().kodikToken) {
+    results.append(el("div", { class: "empty" },
+      el("p", { text: "Для поиска по Kodik нужен свой ключ API. Kodik выдаёт его по заявке, вставить ключ можно в профиле → «Поиск в Kodik»." }),
+      el("button", { text: "Открыть профиль", onclick: () => { state.tab = "profile"; render(); } })));
+    return;
+  }
+  pagedList(results, () => A.api.searchExternal(src, state.query, { kodikToken: settings.get().kodikToken }));
+}
+
 function renderSearch(view) {
   const input = el("input", { type: "search", placeholder: "Название аниме", value: state.query, enterkeyhint: "search" });
   const results = el("div");
@@ -409,11 +427,15 @@ function renderSearch(view) {
     e.preventDefault();
     state.query = input.value.trim();
     input.blur();
-    results.replaceChildren();
-    if (state.query) pagedList(results, (p) => A.api.search(state.query, p));
+    runSearch(results);
   } }, input, el("button", { text: "Найти" }));
-  view.append(header("Поиск"), form, results);
-  if (state.query) pagedList(results, (p) => A.api.search(state.query, p));
+  const sources = chips(SEARCH_SOURCES, settings.get().searchSource || "anixart", async (v) => {
+    await settings.set({ searchSource: v });
+    sources.querySelectorAll(".chip").forEach((b, i) => b.classList.toggle("on", SEARCH_SOURCES[i][0] === v));
+    runSearch(results);
+  });
+  view.append(header("Поиск"), sources, form, results);
+  if (state.query) runSearch(results);
   else setTimeout(() => input.focus(), 50);
 }
 
@@ -442,7 +464,11 @@ function renderRelease(view, screen) {
   const body = el("div");
   view.append(body);
   body.append(spinner());
-  A.api.release(screen.releaseId).then((r) => {
+  const external = isExternalId(screen.releaseId);
+  const load = external
+    ? A.api.external(screen.releaseId, { kodikToken: settings.get().kodikToken })
+    : A.api.release(screen.releaseId);
+  load.then((r) => {
     body.replaceChildren();
     const meta = [r.year, r.status && r.status.name, r.episodes_total ? `${r.episodes_released ?? "?"} из ${r.episodes_total} эп.` : null].filter(Boolean).join(" · ");
     body.append(el("div", { class: "title-head" },
@@ -456,18 +482,19 @@ function renderRelease(view, screen) {
           : null,
       ),
     ));
-    body.append(listControls(r));
+    if (external) body.append(el("div", { class: "row-sub accent pad-b", text: `Источник: ${r.providerName} · не из Anixart, в аккаунт не отмечается` }));
+    else body.append(listControls(r));
     if (r.description) {
       const d = el("p", { class: "desc clamp", text: r.description, onclick: () => d.classList.toggle("clamp") });
       body.append(d);
     }
-    const related = relatedBlock(r);
+    const related = external ? null : relatedBlock(r);
     if (related) body.append(related);
     if (r.is_play_disabled || r.is_view_blocked) {
       body.append(el("div", { class: "muted pad", text: "Этот тайтл недоступен для просмотра." }));
       return;
     }
-    episodePicker(body, r);
+    episodePicker(body, r, external ? externalProvider(r) : anixartProvider);
   }).catch((err) => body.replaceChildren(errorBox(err)));
 }
 
@@ -589,6 +616,7 @@ async function playOnline(r, eps, sourceId, dubberName, position) {
     position: ep.position,
     name: ep.name || `${ep.position} серия`,
     url: ep.url,
+    skip: ep.skip, // у AniLibria тайминги опенинга приходят вместе с серией
     dubberName,
   }));
   const index = Math.max(0, items.findIndex((x) => x.position === position));
@@ -601,7 +629,27 @@ async function playOnline(r, eps, sourceId, dubberName, position) {
   }, () => render());
 }
 
-function episodePicker(box, r) {
+// Откуда брать озвучки, источники и серии: Anixart или внешний тайтл (AniLibria, Kodik).
+// У внешнего тайтла озвучки уже пришли вместе с ним, а «источник» у каждой один.
+const anixartProvider = {
+  dubbers: (r) => A.api.dubbers(r.id),
+  sources: (r, dubberId) => A.api.sources(r.id, dubberId),
+  episodes: (r, dubberId, sourceId) => A.api.episodes(r.id, dubberId, sourceId),
+};
+
+function externalProvider(r) {
+  const tr = (id) => (r.translations || []).find((t) => t.id === id);
+  return {
+    dubbers: async () => r.translations || [],
+    sources: async (_r, dubberId) => {
+      const t = tr(dubberId);
+      return t ? [{ id: t.id, name: r.providerName, episodes_count: t.episodes_count }] : [];
+    },
+    episodes: async (_r, dubberId) => (tr(dubberId) || { episodes: [] }).episodes,
+  };
+}
+
+function episodePicker(box, r, P = anixartProvider) {
   const st = settings.get();
   const dubSel = el("select");
   const srcSel = el("select");
@@ -662,7 +710,7 @@ function episodePicker(box, r) {
     srcSel.replaceChildren(); list.replaceChildren(); selected.clear(); refreshButtons();
     info.textContent = "Загрузка источников…"; info.hidden = false;
     try {
-      sources = await A.api.sources(r.id, Number(dubSel.value));
+      sources = await P.sources(r, Number(dubSel.value));
       for (const s of sources) srcSel.append(el("option", { value: s.id, text: `${s.name} · ${s.episodes_count} эп.` }));
       if (saved.sourceId && sources.some((s) => s.id === saved.sourceId)) srcSel.value = String(saved.sourceId);
       if (!sources.length) { info.textContent = "Для этой озвучки нет источников."; return; }
@@ -677,7 +725,7 @@ function episodePicker(box, r) {
     saved.sourceId = Number(srcSel.value);
     localStorage.setItem(`pick:${r.id}`, JSON.stringify(saved));
     try {
-      eps = await A.api.episodes(r.id, saved.dubberId, saved.sourceId);
+      eps = await P.episodes(r, saved.dubberId, saved.sourceId);
       info.hidden = Boolean(eps.length);
       info.textContent = eps.length ? "" : "Серий нет.";
       drawEpisodes();
@@ -687,7 +735,7 @@ function episodePicker(box, r) {
   const dubberName = () => {
     const dub = dubbers.find((d) => d.id === saved.dubberId);
     const src = sources.find((s) => s.id === saved.sourceId);
-    return [dub && dub.name, src && src.name].filter(Boolean).join(", ");
+    return [...new Set([dub && dub.name, src && src.name].filter(Boolean))].join(", ");
   };
   const watchAt = (position) => playOnline(r, eps, saved.sourceId, dubberName(), position);
 
@@ -772,6 +820,7 @@ function episodePicker(box, r) {
         position: ep.position,
         name: ep.name || `${ep.position} серия`,
         url: ep.url,
+        skip: ep.skip,
         quality: qSel.value,
         watched: ep.is_watched,
       });
@@ -791,7 +840,7 @@ function episodePicker(box, r) {
 
   (async () => {
     try {
-      dubbers = await A.api.dubbers(r.id);
+      dubbers = await P.dubbers(r);
       if (!dubbers.length) { info.textContent = "Серий пока нет."; return; }
       for (const d of dubbers) dubSel.append(el("option", { value: d.id, text: `${d.name}${d.is_sub ? " (субтитры)" : ""} · ${d.episodes_count} эп.` }));
       const pick = [saved.dubberId, lastDub].find((id) => dubbers.some((d) => d.id === id));
@@ -864,6 +913,23 @@ function renderProfile(view) {
     seg([[5, "5 с"], [10, "10 с"], [15, "15 с"], [30, "30 с"]], st.seekStep, "seekStep"),
     el("div", { class: "row-sub", text: "Если отрезков нет, кнопка «пропустить» перематывает на" }),
     seg([[80, "80 с"], [85, "85 с"], [90, "90 с"], [120, "120 с"]], st.skipOpening, "skipOpening"),
+  ));
+
+  // Поиск в Kodik: свой ключ API (Kodik выдаёт его по заявке). Хранится только на телефоне.
+  const tokenInput = el("input", { type: "password", placeholder: "Ключ API Kodik", value: st.kodikToken || "", autocomplete: "off" });
+  view.append(el("div", { class: "card form" },
+    el("h2", { text: "Поиск в Kodik" }),
+    el("div", { class: "row-sub", text: "Поиск по AniLibria работает без ключа. Для Kodik нужен свой ключ API — Kodik выдаёт его по заявке. Ключ хранится только на этом телефоне." }),
+    tokenInput,
+    el("div", { class: "btn-row" },
+      el("button", { text: "Сохранить", onclick: async () => {
+        await settings.set({ kodikToken: tokenInput.value.trim() });
+        toast(tokenInput.value.trim() ? "Ключ Kodik сохранён" : "Ключ Kodik удалён");
+      } }),
+      st.kodikToken ? el("button", { class: "ghost", text: "Удалить", onclick: async () => {
+        await settings.set({ kodikToken: "" });
+        render();
+      } }) : null),
   ));
 
   const logBox = el("pre", { class: "log", hidden: true });

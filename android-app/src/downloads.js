@@ -217,7 +217,7 @@ class Downloads {
       quality: null,
       kind: null,
       entry: null,
-      skip: undefined, // тайминги OP/ED: {op, ed} | null | undefined (ещё не искали)
+      skip: info.skip, // тайминги OP/ED: {op, ed} | null | undefined (ещё не искали); у AniLibria приходят сразу
       status: "queued",
       progress: 0,
       bytes: 0,

@@ -442,3 +442,4 @@ button.small { padding: 8px 12px; font-size: 14px; }
 .mode-chips { margin-top: 14px; }
 .ep-pick.watch .check { display: none; }
 .ep-pick.watch::before { content: "▶"; color: var(--accent-2); font-size: 13px; width: 16px; flex: none; }
+.pad-b { margin-bottom: 8px; }

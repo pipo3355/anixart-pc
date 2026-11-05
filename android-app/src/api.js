@@ -2,6 +2,7 @@
 
 import { Network } from "@capacitor/network";
 import { Anixart, AnixartError, HttpError, BookmarkSortType } from "anixartjs";
+import { searchExternal, getExternal, isExternalId } from "../../external.js";
 import { prefs, readJson, writeJson, removePath, hash, serial } from "./storage.js";
 
 const REQ = { timeoutMs: 20_000 };
@@ -38,6 +39,7 @@ export function describeError(err, where) {
 }
 
 function isNetworkError(err) {
+  if (err && err.final) return false; // внешние источники: нет ключа, ключ не подошёл и т.п.
   if (err instanceof AnixartError || err instanceof LoginRequiredError) return false;
   if (err instanceof HttpError) return err.status >= 500;
   return true;
@@ -164,6 +166,10 @@ export const api = {
     (await client.endpoints.episode.sources(releaseId, dubberId, REQ)).sources || []),
   episodes: (releaseId, dubberId, sourceId) => cached(`eps:${releaseId}:${dubberId}:${sourceId}`, async () =>
     (await client.endpoints.episode.episodes(releaseId, dubberId, sourceId, 0, REQ)).episodes || []),
+  // поиск и тайтлы не из Anixart (AniLibria, Kodik); страница тайтла тоже кэшируется — для офлайна
+  searchExternal: (provider, query, opts) => cached(`ext-search:${provider}:${query}`, async () =>
+    ({ items: await searchExternal(provider, query, opts), page: 0, totalPages: 1 })),
+  external: (id, opts) => cached(`ext:${id}`, () => getExternal(id, opts)),
   // все релизы связанной группы (сезоны, фильмы, OVA), постранично
   related: (relatedId, pageNum = 0) => cached(`related:${relatedId}:${pageNum}`, async () =>
     page(await client.endpoints.related.get(relatedId, pageNum, REQ))),
@@ -220,6 +226,7 @@ async function sendMark({ releaseId, sourceId, position, watched }) {
 
 export async function setWatched(releaseId, sourceId, position, watched) {
   if (!session.token) return { queued: false, skipped: true };
+  if (isExternalId(releaseId)) return { queued: false, skipped: true }; // тайтл не из Anixart — в аккаунт не отмечаем
   const mark = { releaseId, sourceId, position, watched, at: Date.now() };
   const waiting = pending.some((m) => m.releaseId === releaseId && m.position === position);
   let queued = false;

@@ -216,7 +216,7 @@ class DownloadManager {
       wantQuality: String(info.quality || "720"),
       quality: null,
       kind: null, // "hls" | "file"
-      skip: undefined, // тайминги OP/ED: {op, ed} | null (не нашлись) | undefined (ещё не искали)
+      skip: info.skip, // тайминги OP/ED: {op, ed} | null (не нашлись) | undefined (ещё не искали); у AniLibria приходят сразу
       entry: null, // файл, с которого начинается просмотр
       status: "queued",
       progress: 0,

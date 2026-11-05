@@ -1,7 +1,7 @@
 {
   "name": "anixart-pc",
   "productName": "Anixart PC",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "description": "Неофициальный десктоп-клиент Anixart с синхронизацией аккаунта",
   "author": {
     "name": "pipo3355",
@@ -33,6 +33,7 @@
       "player-preload.js",
       "downloads.js",
       "skiptimes.js",
+      "external.js",
       "renderer/**/*",
       "build/icon.png"
     ],

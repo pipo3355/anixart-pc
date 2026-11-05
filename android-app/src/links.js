@@ -2,6 +2,7 @@
 
 import { KodikParser, SibnetParser, RutubeParser, VKVideoParser, OKParser, AniLibriaParser } from "anixartjs";
 import { sleep } from "./device.js";
+import { isAniLibriaEpisodeUrl, anilibriaEpisodeLinks } from "../../external.js";
 
 // На мобильной сети цепочка из 2–3 запросов может идти долго — даём с запасом
 const PARSE = { timeoutMs: 45_000 };
@@ -47,6 +48,8 @@ async function kodik(url) {
 }
 
 async function resolve(url) {
+  // серия AniLibria из внешнего поиска: ссылка на её запись в API AniLibria
+  if (isAniLibriaEpisodeUrl(url)) return anilibriaEpisodeLinks(url);
   const host = new URL(url).hostname;
   if (host.includes("kodik")) return kodik(url);
   if (host.includes("sibnet")) return SibnetParser.getDirectLinks(url, PARSE);
