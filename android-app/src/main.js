@@ -404,20 +404,26 @@ function pagedList(container, fetchPage) {
 }
 
 // Где искать: Anixart или внешние источники (AniLibria — без ключа, Kodik — со своим ключом API)
-const SEARCH_SOURCES = [["anixart", "Anixart"], ["anilibria", "AniLibria"], ["kodik", "Kodik"]];
+const SEARCH_SOURCES = [["anixart", "Anixart"], ["anilibria", "AniLibria"], ["yummy", "Yummy"], ["kodik", "Kodik"]];
 
 function runSearch(results) {
   results.replaceChildren();
   if (!state.query) return;
   const src = settings.get().searchSource || "anixart";
   if (src === "anixart") { pagedList(results, (p) => A.api.search(state.query, p)); return; }
+  if (src === "yummy" && !settings.get().yummyToken) {
+    results.append(el("div", { class: "empty" },
+      el("p", { text: "Для поиска по Yummy Anime нужен токен своего приложения: создайте его на yummyani.me/dev/applications (бесплатно) и вставьте в профиле → «Yummy Anime»." }),
+      el("button", { text: "Открыть профиль", onclick: () => { state.tab = "profile"; render(); } })));
+    return;
+  }
   if (src === "kodik" && !settings.get().kodikToken) {
     results.append(el("div", { class: "empty" },
       el("p", { text: "Для поиска по Kodik нужен свой ключ API. Kodik выдаёт его по заявке, вставить ключ можно в профиле → «Поиск в Kodik»." }),
       el("button", { text: "Открыть профиль", onclick: () => { state.tab = "profile"; render(); } })));
     return;
   }
-  pagedList(results, () => A.api.searchExternal(src, state.query, { kodikToken: settings.get().kodikToken }));
+  pagedList(results, () => A.api.searchExternal(src, state.query, { kodikToken: settings.get().kodikToken, yummyToken: settings.get().yummyToken }));
 }
 
 function renderSearch(view) {
@@ -466,7 +472,7 @@ function renderRelease(view, screen) {
   body.append(spinner());
   const external = isExternalId(screen.releaseId);
   const load = external
-    ? A.api.external(screen.releaseId, { kodikToken: settings.get().kodikToken })
+    ? A.api.external(screen.releaseId, { kodikToken: settings.get().kodikToken, yummyToken: settings.get().yummyToken })
     : A.api.release(screen.releaseId);
   load.then((r) => {
     body.replaceChildren();
@@ -641,11 +647,19 @@ function externalProvider(r) {
   const tr = (id) => (r.translations || []).find((t) => t.id === id);
   return {
     dubbers: async () => r.translations || [],
+    // у Yummy у озвучки несколько плееров (источников), у остальных — один
     sources: async (_r, dubberId) => {
       const t = tr(dubberId);
-      return t ? [{ id: t.id, name: r.providerName, episodes_count: t.episodes_count }] : [];
+      if (!t) return [];
+      if (t.sources) return t.sources.map((x) => ({ id: x.id, name: x.name, episodes_count: x.episodes_count }));
+      return [{ id: t.id, name: r.providerName, episodes_count: t.episodes_count }];
     },
-    episodes: async (_r, dubberId) => (tr(dubberId) || { episodes: [] }).episodes,
+    episodes: async (_r, dubberId, sourceId) => {
+      const t = tr(dubberId);
+      if (!t) return [];
+      if (t.sources) return (t.sources.find((x) => x.id === sourceId) || t.sources[0] || { episodes: [] }).episodes;
+      return t.episodes;
+    },
   };
 }
 
@@ -913,6 +927,20 @@ function renderProfile(view) {
     seg([[5, "5 с"], [10, "10 с"], [15, "15 с"], [30, "30 с"]], st.seekStep, "seekStep"),
     el("div", { class: "row-sub", text: "Если отрезков нет, кнопка «пропустить» перематывает на" }),
     seg([[80, "80 с"], [85, "85 с"], [90, "90 с"], [120, "120 с"]], st.skipOpening, "skipOpening"),
+  ));
+
+  // Yummy Anime: публичный токен своего приложения (yummyani.me/dev/applications). Хранится только на телефоне.
+  const ymInput = el("input", { type: "password", placeholder: "Токен приложения Yummy", value: st.yummyToken || "", autocomplete: "off" });
+  view.append(el("div", { class: "card form" },
+    el("h2", { text: "Yummy Anime" }),
+    el("div", { class: "row-sub", text: "Для поиска по Yummy Anime нужен токен своего приложения: создайте его на yummyani.me/dev/applications — это бесплатно. API Yummy — только для личного использования. Токен хранится только на этом телефоне." }),
+    ymInput,
+    el("div", { class: "btn-row" },
+      el("button", { text: "Сохранить", onclick: async () => {
+        await settings.set({ yummyToken: ymInput.value.trim() });
+        toast(ymInput.value.trim() ? "Токен Yummy сохранён" : "Токен Yummy удалён");
+      } }),
+      el("button", { class: "ghost", text: "Открыть yummyani.me", onclick: () => openExternal("https://yummyani.me/dev/applications") })),
   ));
 
   // Поиск в Kodik: свой ключ API (Kodik выдаёт его по заявке). Хранится только на телефоне.

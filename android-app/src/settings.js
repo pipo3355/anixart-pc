@@ -11,8 +11,9 @@ const DEFAULTS = {
   onlyWifi: false,
   sort: "recent", // recent | title | size | unwatched
   filter: "all", // all | unwatched | watched | active
-  searchSource: "anixart", // где искать: anixart | anilibria | kodik
+  searchSource: "anixart", // где искать: anixart | anilibria | yummy | kodik
   kodikToken: "", // свой ключ API Kodik (для поиска по Kodik)
+  yummyToken: "", // публичный токен своего приложения Yummy Anime (X-Application)
 };
 
 let current = { ...DEFAULTS };

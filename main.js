@@ -109,6 +109,7 @@ const DEFAULT_SETTINGS = {
   skipMode: "button", // OP/ED: "auto" — пропускать сразу, "button" — показывать кнопку, "off"
   searchSource: "anixart", // где искать: anixart | anilibria | kodik
   kodikToken: "", // свой ключ API Kodik (для поиска по Kodik), хранится только на этом компьютере
+  yummyToken: "", // публичный токен своего приложения Yummy Anime (X-Application)
 };
 let settings = { ...DEFAULT_SETTINGS };
 const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
@@ -126,7 +127,8 @@ function sanitizeSettings(input) {
   if ("seekStep" in input) out.seekStep = clampInt(input.seekStep, 1, 120, out.seekStep);
   if ("skipOpening" in input) out.skipOpening = clampInt(input.skipOpening, 1, 600, out.skipOpening);
   if (["auto", "button", "off"].includes(input.skipMode)) out.skipMode = input.skipMode;
-  if (["anixart", "anilibria", "kodik"].includes(input.searchSource)) out.searchSource = input.searchSource;
+  if (["anixart", "anilibria", "yummy", "kodik"].includes(input.searchSource)) out.searchSource = input.searchSource;
+  if (typeof input.yummyToken === "string") out.yummyToken = input.yummyToken.trim().slice(0, 200);
   if (typeof input.kodikToken === "string") out.kodikToken = input.kodikToken.trim().slice(0, 200);
   return out;
 }
@@ -420,8 +422,8 @@ handleCached("updates:get", async (pageNum = 0) => {
 // newStatus: 0 — убрать из списков, 1..5 — BookmarkType
 // Поиск и тайтлы не из Anixart: AniLibria (без ключа) и Kodik (свой ключ API из настроек)
 handleCached("external:search", async (provider, query) =>
-  ({ items: await external.searchExternal(provider, query, { kodikToken: settings.kodikToken }), page: 0, totalPages: 1 }));
-handleCached("external:get", async (id) => external.getExternal(id, { kodikToken: settings.kodikToken }));
+  ({ items: await external.searchExternal(provider, query, { kodikToken: settings.kodikToken, yummyToken: settings.yummyToken }), page: 0, totalPages: 1 }));
+handleCached("external:get", async (id) => external.getExternal(id, { kodikToken: settings.kodikToken, yummyToken: settings.yummyToken }));
 
 handle("list:set", async (releaseId, newStatus, oldStatus) => {
   requireLogin();

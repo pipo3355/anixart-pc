@@ -176,7 +176,7 @@ function switchView(v) {
 }
 
 // Где искать: Anixart или внешние источники (AniLibria — без ключа, Kodik — со своим ключом API)
-const SEARCH_SOURCES = [["anixart", "Anixart"], ["anilibria", "AniLibria"], ["kodik", "Kodik"]];
+const SEARCH_SOURCES = [["anixart", "Anixart"], ["anilibria", "AniLibria"], ["yummy", "Yummy"], ["kodik", "Kodik"]];
 const searchSource = () => (state.settings && state.settings.searchSource) || "anixart";
 
 function renderSearchSources() {
@@ -192,6 +192,9 @@ async function fetchPage(pageNum) {
   if (v.type === "search") {
     const src = searchSource();
     if (src === "anixart") return call(window.api.search, state.query, pageNum);
+    if (src === "yummy" && !(state.settings && state.settings.yummyToken)) {
+      throw new Error("Для поиска по Yummy Anime нужен токен своего приложения: создайте его на yummyani.me/dev/applications (бесплатно) и вставьте в «Настройки» → «Yummy Anime».");
+    }
     if (src === "kodik" && !(state.settings && state.settings.kodikToken)) {
       throw new Error("Для поиска по Kodik нужен свой ключ API — Kodik выдаёт его по заявке. Вставьте ключ в «Настройки» → «Поиск в Kodik».");
     }
@@ -392,6 +395,22 @@ function aboutSection() {
   );
 }
 
+// Публичный токен своего приложения Yummy Anime (yummyani.me/dev/applications)
+function yummySetting(st) {
+  const input = el("input", { type: "password", placeholder: "Токен приложения Yummy", value: st.yummyToken || "", autocomplete: "off", class: "token-input" });
+  return el("section", { class: "setting" },
+    el("h2", { text: "Yummy Anime" }),
+    el("p", { text: "Для поиска по Yummy Anime нужен токен своего приложения: создайте его на yummyani.me/dev/applications — это бесплатно. API Yummy — только для личного использования. Токен хранится только на этом компьютере." }),
+    el("div", { class: "token-row" },
+      input,
+      el("button", { type: "button", text: "Сохранить", onclick: async () => {
+        await saveSettings({ yummyToken: input.value.trim() });
+        toast(input.value.trim() ? "Токен Yummy сохранён" : "Токен Yummy удалён");
+      } }),
+      el("button", { type: "button", class: "ghost", text: "Открыть сайт", onclick: () => window.api.openExternal("https://yummyani.me/dev/applications") })),
+  );
+}
+
 // Ключ API Kodik для поиска по Kodik (Kodik выдаёт его по заявке). Хранится только на этом компьютере.
 function kodikSetting(st) {
   const input = el("input", { type: "password", placeholder: "Ключ API Kodik", value: st.kodikToken || "", autocomplete: "off", class: "token-input" });
@@ -433,6 +452,7 @@ function renderSettings() {
         custom,
       ),
     ),
+    yummySetting(st),
     kodikSetting(st),
     el("section", { class: "setting" },
       el("h2", { text: "Перемотка стрелками" }),
@@ -795,11 +815,19 @@ function externalProvider(r) {
   const tr = (id) => (r.translations || []).find((t) => t.id === id);
   return {
     dubbers: async () => r.translations || [],
+    // у Yummy у озвучки несколько плееров (источников), у остальных — один
     sources: async (_r, dubberId) => {
       const t = tr(dubberId);
-      return t ? [{ id: t.id, name: r.providerName, episodes_count: t.episodes_count }] : [];
+      if (!t) return [];
+      if (t.sources) return t.sources.map((x) => ({ id: x.id, name: x.name, episodes_count: x.episodes_count }));
+      return [{ id: t.id, name: r.providerName, episodes_count: t.episodes_count }];
     },
-    episodes: async (_r, dubberId) => (tr(dubberId) || { episodes: [] }).episodes,
+    episodes: async (_r, dubberId, sourceId) => {
+      const t = tr(dubberId);
+      if (!t) return [];
+      if (t.sources) return (t.sources.find((x) => x.id === sourceId) || t.sources[0] || { episodes: [] }).episodes;
+      return t.episodes;
+    },
   };
 }
 
